@@ -1,0 +1,96 @@
+{
+  "projectType": "framework",
+  "projectName": "EventConnect",
+  "projectDescription": "A zero-knowledge proof application framework for building zkApps with EdDSA signatures, Circom circuits, and Ethereum smart contracts.",
+  "theme": "aspen",
+  "primaryColor": "#8B5CF6",
+  "lightColor": "#A78BFA",
+  "darkColor": "#7C3AED",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/zero-knowledge-proofs",
+              "concepts/eddsa-signatures",
+              "concepts/circuits",
+              "concepts/smart-contracts"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/building-circuits",
+              "guides/deploying-contracts",
+              "guides/frontend-integration",
+              "guides/eddsa-signature-rollup"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Circuits",
+            "pages": [
+              "api/circuits/zkp-client",
+              "api/circuits/eddsa"
+            ]
+          },
+          {
+            "group": "Contracts",
+            "pages": [
+              "api/contracts/event-connect",
+              "api/contracts/event-connect-semaphore",
+              "api/contracts/zk-app"
+            ]
+          },
+          {
+            "group": "React Hooks",
+            "pages": [
+              "api/hooks/contract-hooks",
+              "api/hooks/circuit-hooks"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Zero-knowledge proof generation with Circom circuits",
+    "EdDSA signature verification and rollup",
+    "Ethereum smart contracts for on-chain verification",
+    "React frontend with Web3 integration",
+    "Semaphore protocol integration for privacy",
+    "Group fingerprint management system",
+    "TypeScript SDK for circuit and contract interaction"
+  ],
+  "publicApiSurface": [
+    "ZKPClient.prove()",
+    "EdDSA.sign()",
+    "EdDSA.verify()",
+    "EventConnect.updateGroups()",
+    "EventConnect.getFingerprintCreationDate()",
+    "EventConnectSemaphore.verifyProof()",
+    "ZkApp.record()",
+    "ZkApp.verify()",
+    "useZKApp()",
+    "useVerifier()",
+    "useTotalRecords()",
+    "useRecord()",
+    "useCircuit()",
+    "useEdDSA()"
+  ]
+}

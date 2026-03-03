@@ -1,0 +1,704 @@
+---
+title: EdDSA signature rollup
+description: Complete tutorial for building a multi-signature rollup with zero-knowledge proofs
+---
+
+## Overview
+
+This tutorial demonstrates how to build a complete EdDSA signature rollup system that verifies multiple signatures in a single zero-knowledge proof. You'll update circuits, smart contracts, and the frontend to support multi-signature verification.
+
+## Update circuits and test them
+
+<Steps>
+  <Step title="Update your circuit">
+    Modify the circuit to accept multiple signatures instead of just one. Change the template to accept a parameter `n` for the number of signatures:
+
+    ```circom
+    pragma circom 2.0.0;
+    include "../../node_modules/circomlib/circuits/eddsaposeidon.circom";
+
+    template Sample(n) {
+        // public
+        signal input M;
+        signal input Ax[n];
+        signal input Ay[n];
+        // private
+        signal input S[n];
+        signal input R8x[n];
+        signal input R8y[n];
+
+        component verifier[n];
+        for (var i = 0; i < n; i++) {
+            verifier[i] = EdDSAPoseidonVerifier();
+            verifier[i].enabled <== 1;
+            verifier[i].Ax <== Ax[i];
+            verifier[i].Ay <== Ay[i];
+            verifier[i].S <== S[i];
+            verifier[i].R8x <== R8x[i];
+            verifier[i].R8y <== R8y[i];
+            verifier[i].M <== M;
+        }
+    }
+
+    component main { public [M, Ax, Ay] } = Sample(3);
+    ```
+
+    Key changes:
+    - Template now accepts parameter `n` for number of signatures
+    - All signature-related inputs are now arrays
+    - Loop creates `n` verifier components
+    - Main component instantiated with `Sample(3)` for 3-of-3 multisig
+  </Step>
+
+  <Step title="Update the client code and test cases">
+    Update the ZKP client to handle array inputs:
+
+    ```typescript
+    // Client code update
+    export class ZKPClient {
+      async prove({
+        M,
+        Ax,
+        Ay,
+        S,
+        R8x,
+        R8y,
+      }: {
+        M: bigint;
+        Ax: bigint[];  // Changed from bigint to bigint[]
+        Ay: bigint[];  // Changed from bigint to bigint[]
+        S: bigint[];   // Changed from bigint to bigint[]
+        R8x: bigint[]; // Changed from bigint to bigint[]
+        R8y: bigint[]; // Changed from bigint to bigint[]
+      }): Promise<Proof> {
+        const inputs = {
+          M,
+          Ax,
+          Ay,
+          S,
+          R8x,
+          R8y,
+        };
+        // ... proof generation logic
+      }
+    }
+    ```
+
+    Update test cases to use multiple accounts:
+
+    ```typescript
+    describe("Test zkp circuit and scripts", function () {
+      let client: ZKPClient;
+      let accounts: [EdDSA, EdDSA, EdDSA];
+      
+      beforeEach(async () => {
+        const wasm = fs.readFileSync(
+          path.join(__dirname, "../../circuits/zk/circuits/main_js/main.wasm")
+        );
+        const zkey = fs.readFileSync(
+          path.join(__dirname, "../../circuits/zk/zkeys/main.zkey")
+        );
+        client = await new ZKPClient().init(wasm, zkey);
+        accounts = await Promise.all([
+          new EdDSA("0x1111").init(),
+          new EdDSA("0x2222").init(),
+          new EdDSA("0x3333").init(),
+        ]);
+      });
+      
+      it("Should able to prove and verify the zkp", async function () {
+        const message = BigNumber.from(
+          "0xABCDEF00ABCDEF00ABCDEF00ABCDEF00ABCDEF00ABCDEF00ABCDEF00ABCDEF00"
+        );
+        
+        // Generate signatures from all accounts
+        const signatures = await Promise.all(
+          accounts.map((acc) => acc.sign(message))
+        );
+        
+        // Verify all signatures
+        const result = await Promise.all(
+          accounts.map((acc, i) => acc.verify(message, signatures[i], acc.pubKey))
+        );
+        result.map((res) => expect(res).to.eq(true));
+        
+        const F = accounts[0].babyjub.F;
+        const proof = await client.prove({
+          M: message.toBigInt(),
+          Ax: accounts.map((acc) => acc.scalarPubKey[0]),
+          Ay: accounts.map((acc) => acc.scalarPubKey[1]),
+          S: signatures.map((sig) => sig.S),
+          R8x: signatures.map((sig) => F.toObject(sig.R8[0])),
+          R8y: signatures.map((sig) => F.toObject(sig.R8[1])),
+        });
+        
+        expect(proof).not.to.eq(undefined);
+      });
+    });
+    ```
+  </Step>
+
+  <Step title="Run the test">
+    Build and test your updated circuits:
+
+    <CodeGroup>
+    ```bash npm
+    npm run build
+    npm run test
+    ```
+
+    ```bash yarn
+    yarn workspace circuits build
+    yarn workspace circuits test
+    ```
+
+    ```bash pnpm
+    pnpm --filter circuits build
+    pnpm --filter circuits test
+    ```
+    </CodeGroup>
+  </Step>
+</Steps>
+
+<Note>
+The circuit now verifies 3 EdDSA signatures in a single proof, significantly reducing on-chain verification costs.
+</Note>
+
+## Update the contract
+
+<Steps>
+  <Step title="Update the smart contract">
+    Modify the contract to support key registration and the new public input structure:
+
+    ```solidity
+    //SPDX-License-Identifier: GPL-3.0-or-later
+    pragma solidity >=0.8.0;
+
+    interface IVerifier {
+        function verifyProof(
+            uint256[2] memory a,
+            uint256[2][2] memory b,
+            uint256[2] memory c,
+            uint256[7] memory input  // Changed from [3] to [7]
+        ) external view returns (bool r);
+    }
+
+    contract ZkApp {
+        struct Proof {
+            uint256[2] a;
+            uint256[2][2] b;
+            uint256[2] c;
+        }
+
+        address public immutable verifier;
+        uint256[2][] public pubKeys;
+        uint256[] public signedMessages;
+
+        constructor(address verifier_) {
+            verifier = verifier_;
+        }
+
+        function registerKey(uint256[2] memory key) public {
+            require(pubKeys.length < 3, "Multisig for 3");
+            pubKeys.push(key);
+        }
+
+        function recordSignedMessage(uint256 message, Proof memory proof)
+            public
+        {
+            require(pubKeys.length == 3, "Key registration is not done yet.");
+            uint256[7] memory publicSignals;
+            publicSignals[0] = message;
+            publicSignals[1] = pubKeys[0][0];
+            publicSignals[2] = pubKeys[1][0];
+            publicSignals[3] = pubKeys[2][0];
+            publicSignals[4] = pubKeys[0][1];
+            publicSignals[5] = pubKeys[1][1];
+            publicSignals[6] = pubKeys[2][1];
+            require(verify(publicSignals, proof), "SNARK verification failed");
+            signedMessages.push(message);
+        }
+
+        function verify(uint256[7] memory publicSignals, Proof memory proof)
+            public
+            view
+            returns (bool)
+        {
+            bool result = IVerifier(verifier).verifyProof(
+                proof.a,
+                proof.b,
+                proof.c,
+                publicSignals
+            );
+            return result;
+        }
+
+        function totalSignedMessages() public view returns (uint256) {
+            return signedMessages.length;
+        }
+    }
+    ```
+
+    Key changes:
+    - `IVerifier` now expects 7 public inputs (1 message + 6 public key coordinates)
+    - Added `pubKeys` array to store registered public keys
+    - Added `registerKey()` function for key registration
+    - Replaced `record()` with `recordSignedMessage()` that constructs public signals
+    - Public signals array now includes message and all public keys
+  </Step>
+
+  <Step title="Update the test code">
+    Update contract tests to match the new interface:
+
+    ```typescript
+    describe("Test ZKP contract", function () {
+      let verifier: Verifier;
+      let zkApp: ZkApp;
+      let deployer: SignerWithAddress;
+      let client: ZKPClient;
+      let accounts: [EdDSA, EdDSA, EdDSA];
+      
+      this.beforeEach(async () => {
+        [deployer] = await ethers.getSigners();
+        verifier = await new Verifier__factory(deployer).deploy();
+        accounts = await Promise.all([
+          new EdDSA("0x1111").init(),
+          new EdDSA("0x2222").init(),
+          new EdDSA("0x3333").init(),
+        ]);
+        zkApp = await new ZkApp__factory(deployer).deploy(verifier.address);
+        client = await new ZKPClient().init(
+          fs.readFileSync("../circuits/zk/circuits/main_js/main.wasm"),
+          fs.readFileSync("../circuits/zk/zkeys/main.zkey")
+        );
+      });
+      
+      it("Should able to create a zkp and verify them", async function () {
+        const message = BigNumber.from("0xabcd");
+        const signatures = await Promise.all(
+          accounts.map((acc) => acc.sign(message))
+        );
+        const F = accounts[0].babyjub.F;
+        
+        const proof = await client.prove({
+          M: message.toBigInt(),
+          Ax: accounts.map((acc) => acc.scalarPubKey[0]),
+          Ay: accounts.map((acc) => acc.scalarPubKey[1]),
+          S: signatures.map((sig) => sig.S),
+          R8x: signatures.map((sig) => F.toObject(sig.R8[0])),
+          R8y: signatures.map((sig) => F.toObject(sig.R8[1])),
+        });
+        
+        // Register all keys
+        await zkApp.registerKey(accounts[0].scalarPubKey);
+        await zkApp.registerKey(accounts[1].scalarPubKey);
+        await zkApp.registerKey(accounts[2].scalarPubKey);
+        
+        expect(await zkApp.totalSignedMessages()).to.eq(0);
+        await zkApp.recordSignedMessage(message, proof);
+        expect(await zkApp.totalSignedMessages()).to.eq(1);
+      });
+    });
+    ```
+  </Step>
+
+  <Step title="Build and run test">
+    Compile and test the updated contracts:
+
+    <CodeGroup>
+    ```bash npm
+    npm run build
+    npm run test
+    ```
+
+    ```bash yarn
+    yarn workspace contracts build
+    yarn workspace contracts test
+    ```
+
+    ```bash pnpm
+    pnpm --filter contracts build
+    pnpm --filter contracts test
+    ```
+    </CodeGroup>
+  </Step>
+</Steps>
+
+<Warning>
+Make sure the public input array length in `IVerifier` matches your circuit's public inputs exactly, or verification will fail.
+</Warning>
+
+## Update the UI
+
+<Steps>
+  <Step title="Update hooks">
+    Modify `useContract.ts` to add the new hooks and update existing ones:
+
+    ```typescript
+    // Update useTotalRecords to useTotalSignedMessages
+    export const useTotalSignedMessages = (address: string) => {
+      const zkApp = useZKApp(address);
+      const [totalRecords, setTotalRecords] = useState<BigNumber>();
+      const { library, chainId } = useEthers();
+
+      const fetchTotalSignedMessages = useCallback(async () => {
+        if (!zkApp) return;
+        const _totalRecords = await zkApp.totalSignedMessages();
+        setTotalRecords(_totalRecords);
+      }, [zkApp]);
+
+      useEffect(() => {
+        fetchTotalSignedMessages();
+        library?.on("block", fetchTotalSignedMessages);
+        return () => {
+          library?.off("block", fetchTotalSignedMessages);
+        };
+      }, [address, library, chainId, fetchTotalSignedMessages]);
+
+      return totalRecords;
+    };
+
+    // Update useRecord to useRecordSignedMessage
+    export const useRecordSignedmessage = (address: string) => {
+      const zkApp = useZKApp(address);
+      const [txState, setTxState] = useState<TxState>(TxState.NONE);
+      const { library, chainId, account } = useEthers();
+
+      const recordSignedMessage = useCallback(
+        async ({
+          publicSignals,
+          proof,
+        }: {
+          publicSignals: [BigNumberish];
+          proof: {
+            a: [BigNumberish, BigNumberish];
+            b: [[BigNumberish, BigNumberish], [BigNumberish, BigNumberish]];
+            c: [BigNumberish, BigNumberish];
+          };
+        }) => {
+          if (!zkApp || !account) return;
+          if (!library) return;
+          const signer = library.getSigner(account);
+          zkApp
+            .connect(signer)
+            .recordSignedMessage(publicSignals[0], proof)
+            .then((tx) => {
+              setTxState(TxState.PENDING);
+              tx.wait()
+                .then(() => setTxState(TxState.CONFIRMED))
+                .catch(() => setTxState(TxState.FAILED));
+            })
+            .catch(() => setTxState(TxState.CANCELLED));
+        },
+        [library, chainId, account, zkApp]
+      );
+      return {
+        txState,
+        recordSignedMessage: account ? recordSignedMessage : undefined,
+      };
+    };
+
+    // Add new useRegisterKey hook
+    export const useRegisterKey = (address: string) => {
+      const zkApp = useZKApp(address);
+      const [txState, setTxState] = useState<TxState>(TxState.NONE);
+      const { library, chainId, account } = useEthers();
+
+      const registerKey = useCallback(
+        async ({ pubKey }: { pubKey: [BigNumberish, BigNumberish] }) => {
+          if (!zkApp || !account) return;
+          if (!library) return;
+          const signer = library.getSigner(account);
+          zkApp
+            .connect(signer)
+            .registerKey(pubKey)
+            .then((tx) => {
+              setTxState(TxState.PENDING);
+              tx.wait()
+                .then(() => setTxState(TxState.CONFIRMED))
+                .catch(() => setTxState(TxState.FAILED));
+            })
+            .catch(() => setTxState(TxState.CANCELLED));
+        },
+        [library, chainId, account, zkApp]
+      );
+      return { txState, registerKey: account ? registerKey : undefined };
+    };
+    ```
+  </Step>
+
+  <Step title="Add RegisterKey component">
+    Create a new component for key registration:
+
+    ```typescript
+    import { useRegisterKey } from "../hooks/useContract";
+
+    function RegisterKey({
+      address,
+      pubKey,
+    }: {
+      address: string;
+      pubKey?: [bigint, bigint];
+    }) {
+      const { txState, registerKey } = useRegisterKey(address);
+      
+      return (
+        <div>
+          <p>Tx state: {txState}</p>
+          <button
+            disabled={!registerKey || !pubKey}
+            onClick={() => {
+              if (!pubKey) alert("Pub key is not prepared");
+              else if (!registerKey) alert("Wallet is not connected");
+              else {
+                registerKey({ pubKey });
+              }
+            }}
+          >
+            Register pubkey {pubKey}
+          </button>
+        </div>
+      );
+    }
+
+    export default RegisterKey;
+    ```
+  </Step>
+
+  <Step title="Update GenZKP component">
+    Modify the proof generation component to handle multiple signatures:
+
+    ```typescript
+    import { Proof } from "circuits";
+    import { EdDSASignature } from "circuits/src/eddsa";
+    import useCircuit from "../hooks/useCircuit";
+
+    function GenZKP({
+      signatures,
+      message,
+      pubKeys,
+      onResult,
+    }: {
+      message: bigint;
+      pubKeys?: [bigint, bigint][];
+      signatures?: EdDSASignature[];
+      onResult: (proof: Proof) => void;
+    }) {
+      const { client } = useCircuit();
+      
+      return (
+        <div>
+          <button
+            disabled={!client || !pubKeys || !signatures}
+            onClick={async () => {
+              if (!client) alert("Client is not ready");
+              else if (!pubKeys) alert("EdDSA pubkey is not ready");
+              else if (!signatures) alert("EdDSA signature is not ready");
+              else {
+                client
+                  .prove({
+                    M: message,
+                    Ax: pubKeys.map((key) => key[0]),
+                    Ay: pubKeys.map((key) => key[1]),
+                    S: signatures.map((s) => s.S),
+                    R8x: signatures.map((signature) =>
+                      client.babyjub.F.toObject(signature.R8[0])
+                    ),
+                    R8y: signatures.map((signature) =>
+                      client.babyjub.F.toObject(signature.R8[1])
+                    ),
+                  })
+                  .then(onResult);
+              }
+            }}
+          >
+            Create zkp
+          </button>
+        </div>
+      );
+    }
+
+    export default GenZKP;
+    ```
+  </Step>
+
+  <Step title="Update SendTx component">
+    Simplify the public signals to only include the message:
+
+    ```typescript
+    import { Proof } from "circuits";
+    import { useRecordSignedmessage } from "../hooks/useContract";
+
+    function SendTx({
+      address,
+      publicSignals,
+      proof,
+    }: {
+      address: string;
+      publicSignals?: [bigint];
+      proof?: Proof;
+    }) {
+      const { txState, recordSignedMessage } = useRecordSignedmessage(address);
+      
+      return (
+        <div>
+          <p>Tx state: {txState}</p>
+          <button
+            disabled={!publicSignals || !proof || !recordSignedMessage}
+            onClick={() => {
+              if (!publicSignals) alert("Public signals are not ready");
+              else if (!proof) alert("ZKP is not ready");
+              else if (!recordSignedMessage) alert("Wallet is not connected");
+              else {
+                recordSignedMessage({
+                  publicSignals,
+                  proof,
+                });
+              }
+            }}
+          >
+            Send zkp transaction
+          </button>
+        </div>
+      );
+    }
+
+    export default SendTx;
+    ```
+  </Step>
+
+  <Step title="Update App.tsx">
+    Tie everything together in the main application:
+
+    ```typescript
+    import { Proof } from "circuits";
+    import { EdDSASignature } from "circuits/src/eddsa";
+    import { BigNumber } from "ethers";
+    import { useState } from "react";
+    import Connect from "./components/Connect";
+    import GenZKP from "./components/GenZKP";
+    import SendTx from "./components/SendTx";
+    import SignEdDSA from "./components/SignEdDSA";
+    import Viewer from "./components/Viewer";
+    import useEdDSA from "./hooks/useEdDSA";
+    import Deploy from "./components/Deploy";
+    import RegisterKey from "./components/RegisterKey";
+
+    const msgToSign = BigNumber.from("0x1234").toBigInt();
+
+    function App() {
+      const privKeys = ["0x1111", "0x2222", "0x3333"];
+      const { pubKey: key1 } = useEdDSA(privKeys[0]);
+      const { pubKey: key2 } = useEdDSA(privKeys[1]);
+      const { pubKey: key3 } = useEdDSA(privKeys[2]);
+      const pubKeys = !!key1 && !!key2 && !!key3 ? [key1, key2, key3] : undefined;
+      
+      const [eddsaSignature1, setEdDSASignature1] = useState<EdDSASignature>();
+      const [eddsaSignature2, setEdDSASignature2] = useState<EdDSASignature>();
+      const [eddsaSignature3, setEdDSASignature3] = useState<EdDSASignature>();
+      const eddsaSignatures =
+        !!eddsaSignature1 && !!eddsaSignature2 && !!eddsaSignature3
+          ? [eddsaSignature1, eddsaSignature2, eddsaSignature3]
+          : undefined;
+      
+      const [proof, setProof] = useState<Proof>();
+      const [deployed, setDeployed] = useState<string>();
+      
+      return (
+        <div className="App">
+          <h1>ZKP App Boilerplate</h1>
+          <h2>Step 1. Connect your wallet</h2>
+          <Connect />
+          
+          <h2>Step 2. Deploy smart contracts</h2>
+          <Deploy onResult={setDeployed} />
+          
+          <h2>Step 3. Check the data fetch from the smart contract</h2>
+          {deployed ? <Viewer address={deployed} /> : <p>Not deployed</p>}
+          
+          <h2>Step 4. Register EdDSA keys</h2>
+          {deployed ? (
+            <>
+              <RegisterKey address={deployed} pubKey={key1} />
+              <RegisterKey address={deployed} pubKey={key2} />
+              <RegisterKey address={deployed} pubKey={key3} />
+            </>
+          ) : (
+            <p>Not deployed</p>
+          )}
+          
+          <h2>Step 5. Prepare EdDSA signatures</h2>
+          <SignEdDSA
+            privKey={privKeys[0]}
+            message={msgToSign}
+            onResult={(result) => setEdDSASignature1(result)}
+          />
+          <p>{eddsaSignature1 ? 'signed' : 'None'}</p>
+          
+          <SignEdDSA
+            privKey={privKeys[1]}
+            message={msgToSign}
+            onResult={(result) => setEdDSASignature2(result)}
+          />
+          <p>{eddsaSignature2 ? 'signed' : 'None'}</p>
+          
+          <SignEdDSA
+            privKey={privKeys[2]}
+            message={msgToSign}
+            onResult={(result) => setEdDSASignature3(result)}
+          />
+          <p>{eddsaSignature3 ? 'signed' : 'None'}</p>
+          
+          <h2>Step 6. Compute a zk proof</h2>
+          <GenZKP
+            message={msgToSign}
+            pubKeys={pubKeys}
+            signatures={eddsaSignatures}
+            onResult={(result) => setProof(result)}
+          />
+          
+          <h2>Step 7. Interact with smart contract using the generated proof</h2>
+          {deployed ? (
+            <SendTx address={deployed} publicSignals={[msgToSign]} proof={proof} />
+          ) : (
+            <p>Not deployed</p>
+          )}
+        </div>
+      );
+    }
+
+    export default App;
+    ```
+  </Step>
+
+  <Step title="Update Viewer component">
+    Update the viewer to use the new hook name:
+
+    ```typescript
+    import { useTotalSignedMessages } from "../hooks/useContract";
+
+    function Viewer({ address }: { address: string }) {
+      const totalRecords = useTotalSignedMessages(address);
+      return <div>Total records: {totalRecords?.toString() || "fetching..."}</div>;
+    }
+
+    export default Viewer;
+    ```
+  </Step>
+</Steps>
+
+## Complete workflow
+
+The final application implements a complete 3-of-3 multisig workflow:
+
+1. **Connect wallet** - User connects their Ethereum wallet
+2. **Deploy contracts** - Deploy verifier and ZkApp contracts
+3. **View contract state** - Display total signed messages
+4. **Register keys** - Register all 3 public keys on-chain
+5. **Generate signatures** - Create EdDSA signatures from 3 different private keys
+6. **Generate proof** - Create a single ZK proof verifying all 3 signatures
+7. **Submit transaction** - Send the proof on-chain for verification
+
+<Note>
+This rollup approach reduces gas costs significantly by verifying multiple signatures in a single SNARK proof instead of individual signature checks.
+</Note>

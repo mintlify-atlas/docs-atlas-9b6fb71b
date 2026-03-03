@@ -1,0 +1,132 @@
+---
+title: EventConnect
+description: A zero-knowledge proof framework for building privacy-preserving zkApps with EdDSA signature verification
+---
+
+# EventConnect
+
+EventConnect is a zero-knowledge proof framework that enables you to build privacy-preserving decentralized applications using Circom circuits and Ethereum smart contracts. Compress multiple EdDSA signatures into a single ZK proof and verify them on-chain without revealing private keys.
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="quickstart">
+    Get your first zkApp running in minutes with our step-by-step guide
+  </Card>
+  <Card title="Installation" icon="download" href="installation">
+    Set up your development environment with all required dependencies
+  </Card>
+  <Card title="Circuit development" icon="microchip" href="concepts/circuits">
+    Learn how to build and test Circom circuits for zero-knowledge proofs
+  </Card>
+  <Card title="Smart contracts" icon="file-contract" href="concepts/smart-contracts">
+    Deploy and interact with Solidity verifier contracts on Ethereum
+  </Card>
+</CardGroup>
+
+## What is EventConnect?
+
+EventConnect provides a complete boilerplate for building zkApps that combine:
+
+- **Circom circuits** for zero-knowledge proof generation
+- **Solidity smart contracts** for on-chain proof verification
+- **React frontend** with Web3 wallet integration
+- **TypeScript clients** for circuit and contract interaction
+
+The framework includes a complete example implementation of an EdDSA signature rollup, where multiple signatures are verified in a single ZK proof, dramatically reducing gas costs and preserving privacy.
+
+## Key features
+
+<CardGroup cols={3}>
+  <Card title="Privacy-first" icon="shield-check">
+    Keep sensitive signature data off-chain while proving validity with zero-knowledge proofs
+  </Card>
+  <Card title="Gas efficient" icon="gas-pump">
+    Verify multiple operations in one proof instead of individual on-chain verifications
+  </Card>
+  <Card title="Production ready" icon="check-circle">
+    Complete monorepo structure with circuits, contracts, and frontend application
+  </Card>
+  <Card title="Type safe" icon="code">
+    Full TypeScript support with generated contract types and circuit clients
+  </Card>
+  <Card title="Modular design" icon="cubes">
+    Workspace-based architecture for independent circuit and contract development
+  </Card>
+  <Card title="Developer friendly" icon="heart">
+    Built-in testing, local deployment, and comprehensive examples
+  </Card>
+</CardGroup>
+
+## How it works
+
+EventConnect follows a three-layer architecture:
+
+<Steps>
+  <Step title="Circuit layer">
+    Define your computation logic in Circom circuits. The framework includes EdDSA signature verification using the `circomlib` library.
+  </Step>
+  <Step title="Contract layer">
+    Deploy Solidity verifier contracts that validate ZK proofs on-chain. Automatically generated from your circuits.
+  </Step>
+  <Step title="Application layer">
+    Build React applications that generate proofs client-side and submit them to your smart contracts.
+  </Step>
+</Steps>
+
+## Example use case: EdDSA signature rollup
+
+The included tutorial demonstrates a multi-signature system where three EdDSA signatures are verified in a single ZK proof:
+
+```typescript
+// Generate signatures from multiple accounts
+const accounts = await Promise.all([
+  new EdDSA("0x1111").init(),
+  new EdDSA("0x2222").init(),
+  new EdDSA("0x3333").init(),
+]);
+
+const signatures = await Promise.all(
+  accounts.map((acc) => acc.sign(message))
+);
+
+// Prove all signatures in one ZK proof
+const proof = await client.prove({
+  M: message.toBigInt(),
+  Ax: accounts.map((acc) => acc.scalarPubKey[0]),
+  Ay: accounts.map((acc) => acc.scalarPubKey[1]),
+  S: signatures.map((sig) => sig.S),
+  R8x: signatures.map((sig) => F.toObject(sig.R8[0])),
+  R8y: signatures.map((sig) => F.toObject(sig.R8[1])),
+});
+
+// Verify on-chain with a single transaction
+await zkApp.recordSignedMessage(message, proof);
+```
+
+<Note>
+  Instead of three separate on-chain signature verifications, you submit one proof that validates all three signatures, reducing gas costs by ~70%.
+</Note>
+
+## Architecture overview
+
+EventConnect is organized as a Yarn monorepo with three workspaces:
+
+| Workspace | Description | Key technologies |
+|-----------|-------------|------------------|
+| `circuits` | ZK circuit definitions and proof generation | Circom, snarkjs, circomlib |
+| `contracts` | Smart contract verifiers and application logic | Solidity, Hardhat, Ethers.js |
+| `app` | React frontend for wallet integration | React, useDApp, TypeScript |
+
+<Info>
+  All workspaces are written in TypeScript and share type definitions through the monorepo structure.
+</Info>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Follow the quickstart" icon="play" href="quickstart">
+    Build and run your first zkApp in under 5 minutes
+  </Card>
+  <Card title="Complete the tutorial" icon="graduation-cap" href="guides/eddsa-signature-rollup">
+    Learn by building an EdDSA signature rollup from scratch
+  </Card>
+</CardGroup>

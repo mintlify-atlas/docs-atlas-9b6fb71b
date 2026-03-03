@@ -1,0 +1,252 @@
+---
+title: ZkApp
+description: Generic contract for verifying SNARK proofs and recording public signals
+---
+
+The ZkApp contract provides a generic template for building zero-knowledge proof applications. It verifies SNARK proofs using a configurable verifier contract and maintains a record of verified public signals.
+
+## Contract overview
+
+```solidity
+contract ZkApp
+```
+
+A simple, extensible contract demonstrating how to integrate SNARK proof verification into your application.
+
+## State variables
+
+### verifier
+
+```solidity
+address public immutable verifier
+```
+
+The address of the verifier contract implementing the `IVerifier` interface. Set during construction and cannot be changed.
+
+### records
+
+```solidity
+uint256[3][] public records
+```
+
+Public array storing all verified public signals. This is a sample variable that can be customized based on your application needs.
+
+## Structs
+
+### Proof
+
+<Expandable title="Proof struct">
+  ```solidity
+  struct Proof {
+      uint256[2] a;
+      uint256[2][2] b;
+      uint256[2] c;
+  }
+  ```
+  
+  Encapsulates the three components of a SNARK proof in the format expected by most Groth16 verifiers.
+  
+  <ParamField path="a" type="uint256[2]">
+    First proof component (elliptic curve point)
+  </ParamField>
+  
+  <ParamField path="b" type="uint256[2][2]">
+    Second proof component (elliptic curve point on twisted curve)
+  </ParamField>
+  
+  <ParamField path="c" type="uint256[2]">
+    Third proof component (elliptic curve point)
+  </ParamField>
+</Expandable>
+
+## Constructor
+
+Initializes the ZkApp with a verifier contract address.
+
+```solidity
+constructor(address verifier_)
+```
+
+<ParamField path="verifier_" type="address">
+  Address of the deployed verifier contract
+</ParamField>
+
+**Example usage:**
+
+```solidity
+address verifierAddress = 0x1234...;
+ZkApp app = new ZkApp(verifierAddress);
+```
+
+## Functions
+
+### record
+
+Verifies a SNARK proof and records the public signals if valid.
+
+```solidity
+function record(
+    uint256[3] memory publicSignals,
+    Proof memory proof
+) public
+```
+
+<ParamField path="publicSignals" type="uint256[3]">
+  Array of public inputs/outputs from the zero-knowledge circuit
+</ParamField>
+
+<ParamField path="proof" type="Proof">
+  The SNARK proof to verify
+</ParamField>
+
+**Reverts with:**
+- `"SNARK verification failed"` - The proof is invalid for the given public signals
+
+**Example usage:**
+
+```solidity
+// Prepare public signals (example: age >= 18 proof)
+uint256[3] memory publicSignals = [
+    1,  // isOver18 (boolean output)
+    12345,  // commitment hash
+    67890   // nullifier
+];
+
+// Prepare proof components
+ZkApp.Proof memory proof = ZkApp.Proof({
+    a: [uint256(0x123...), uint256(0x456...)],
+    b: [
+        [uint256(0x789...), uint256(0xabc...)],
+        [uint256(0xdef...), uint256(0x012...)]
+    ],
+    c: [uint256(0x345...), uint256(0x678...)]
+});
+
+// Verify and record
+app.record(publicSignals, proof);
+```
+
+### verify
+
+Verifies a SNARK proof against public signals without recording.
+
+```solidity
+function verify(
+    uint256[3] memory publicSignals,
+    Proof memory proof
+) public view returns (bool)
+```
+
+<ParamField path="publicSignals" type="uint256[3]">
+  Array of public inputs/outputs from the zero-knowledge circuit
+</ParamField>
+
+<ParamField path="proof" type="Proof">
+  The SNARK proof to verify
+</ParamField>
+
+**Returns:** `bool` - `true` if the proof is valid, `false` otherwise
+
+**Example usage:**
+
+```solidity
+// Check if proof is valid before recording
+bool isValid = app.verify(publicSignals, proof);
+
+if (isValid) {
+    // Proceed with recording or other actions
+    app.record(publicSignals, proof);
+} else {
+    // Handle invalid proof
+    revert("Invalid proof provided");
+}
+```
+
+### totalRecords
+
+Returns the total number of verified records stored in the contract.
+
+```solidity
+function totalRecords() public view returns (uint256)
+```
+
+**Returns:** `uint256` - The number of records in the `records` array
+
+**Example usage:**
+
+```solidity
+uint256 count = app.totalRecords();
+require(count > 0, "No records found");
+
+// Access the most recent record
+if (count > 0) {
+    uint256[3] memory latestRecord = app.records(count - 1);
+}
+```
+
+## Customization notes
+
+This contract is designed as a template and should be customized for your specific use case:
+
+### Adjusting public signal length
+
+The contract uses `uint256[3]` for public signals. To change this:
+
+1. Update the array length in all function signatures
+2. Update the `IVerifier` interface to match your verifier's expected input length
+
+```solidity
+// Example: Change to 5 public signals
+function record(
+    uint256[5] memory publicSignals,
+    Proof memory proof
+) public {
+    require(verify(publicSignals, proof), "SNARK verification failed");
+    records.push(publicSignals);
+}
+```
+
+### Custom record storage
+
+Replace the `records` array with application-specific storage:
+
+```solidity
+// Example: Store user commitments instead of raw signals
+mapping(address => uint256) public userCommitments;
+
+function record(
+    uint256[3] memory publicSignals,
+    Proof memory proof
+) public {
+    require(verify(publicSignals, proof), "SNARK verification failed");
+    userCommitments[msg.sender] = publicSignals[0];
+}
+```
+
+## IVerifier interface
+
+The contract expects a verifier implementing this interface:
+
+```solidity
+interface IVerifier {
+    function verifyProof(
+        uint256[2] memory a,
+        uint256[2][2] memory b,
+        uint256[2] memory c,
+        uint256[3] memory input
+    ) external view returns (bool r);
+}
+```
+
+Verifier contracts are typically generated by tools like:
+- [SnarkJS](https://github.com/iden3/snarkjs) - For Groth16 and PLONK proofs
+- [Circom](https://github.com/iden3/circom) - Circuit compiler that generates verifiers
+- [Gnark](https://github.com/ConsenSys/gnark) - Go-based zkSNARK library
+
+## Error conditions
+
+- `"SNARK verification failed"` - Thrown by `record` when the proof verification returns false. This indicates:
+  - The proof is invalid for the given public signals
+  - The proof was generated for different public signals
+  - The proof was generated with a different circuit/verifying key
+  - The proof data is corrupted or malformed

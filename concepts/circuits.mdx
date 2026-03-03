@@ -1,0 +1,493 @@
+---
+title: Circuits
+description: Understand the Circom circuit architecture powering EventConnect's zero-knowledge proofs
+---
+
+## What are circuits?
+
+Circuits in EventConnect are computational programs written in Circom that define the logic for zero-knowledge proofs. They specify what needs to be proven without revealing the underlying private data.
+
+<Info>
+Think of circuits as constraints that inputs must satisfy. If all constraints are met, the proof is valid.
+</Info>
+
+## EventConnect's main circuit
+
+Here's the complete main circuit for EventConnect:
+
+```circom circuits/circuits/main.circom
+pragma circom 2.0.0;
+include "../../node_modules/circomlib/circuits/eddsaposeidon.circom";
+
+template Sample() {
+    // public
+    signal input M;
+    signal input Ax;
+    signal input Ay;
+    // private
+    signal input S;
+    signal input R8x;
+    signal input R8y;
+
+    component verifier = EdDSAPoseidonVerifier();
+
+    verifier.enabled <== 1;
+    verifier.Ax <== Ax;
+    verifier.Ay <== Ay;
+    verifier.S <== S;
+    verifier.R8x <== R8x;
+    verifier.R8y <== R8y;
+    verifier.M <== M;
+}
+
+component main { public [M, Ax, Ay] } = Sample();
+```
+
+### Circuit components breakdown
+
+<Accordion title="Signal declarations">
+  Signals are the inputs and outputs of your circuit:
+  
+  **Public signals** (visible to verifier):
+  - `M`: The message that was signed
+  - `Ax`, `Ay`: Public key coordinates
+  
+  **Private signals** (hidden from verifier):
+  - `S`: Signature scalar component
+  - `R8x`, `R8y`: Signature random point coordinates
+</Accordion>
+
+<Accordion title="Component instantiation">
+  ```circom
+  component verifier = EdDSAPoseidonVerifier();
+  ```
+  
+  This creates an instance of the EdDSA verifier from circomlib, which handles the cryptographic verification logic.
+</Accordion>
+
+<Accordion title="Constraint assignments">
+  ```circom
+  verifier.Ax <== Ax;
+  ```
+  
+  The `<==` operator assigns values AND generates constraints. These constraints ensure the inputs satisfy the EdDSA verification equation.
+</Accordion>
+
+<Accordion title="Main component">
+  ```circom
+  component main { public [M, Ax, Ay] } = Sample();
+  ```
+  
+  Declares which signals are public (all others are private by default).
+</Accordion>
+
+## Signature rollup circuit
+
+For verifying multiple signatures, EventConnect uses a parameterized circuit:
+
+```circom
+template Sample(n) {  // n = number of signatures to verify
+    // public
+    signal input M;
+    signal input Ax[n];
+    signal input Ay[n];
+    // private
+    signal input S[n];
+    signal input R8x[n];
+    signal input R8y[n];
+
+    component verifier[n];
+    for (var i = 0; i < n; i++) {
+        verifier[i] = EdDSAPoseidonVerifier();
+        verifier[i].enabled <== 1;
+        verifier[i].Ax <== Ax[i];
+        verifier[i].Ay <== Ay[i];
+        verifier[i].S <== S[i];
+        verifier[i].R8x <== R8x[i];
+        verifier[i].R8y <== R8y[i];
+        verifier[i].M <== M;
+    }
+}
+
+component main { public [M, Ax, Ay] } = Sample(3);
+```
+
+<Tip>
+The parameter `n` must be set at compile time. To verify a different number of signatures, you need to recompile the circuit with a different value.
+</Tip>
+
+### How rollup works
+
+<Steps>
+  <Step title="Array inputs">
+    Input signals become arrays: `Ax[n]`, `Ay[n]`, `S[n]`, etc.
+  </Step>
+  <Step title="Component array">
+    Create `n` verifier components, one for each signature.
+  </Step>
+  <Step title="Loop verification">
+    Each verifier checks one signature against the same message `M`.
+  </Step>
+  <Step title="Constraint aggregation">
+    All verifiers must pass for the proof to be valid.
+  </Step>
+</Steps>
+
+## Building circuits
+
+Circuits must be compiled before they can generate proofs:
+
+### Compilation process
+
+<CodeGroup>
+
+```bash Build with circom
+circom circuits/main.circom \
+  --r1cs --wasm --sym \
+  -o build/
+```
+
+```bash Generate witness calculator
+node generate_witness.js \
+  main.wasm \
+  input.json \
+  witness.wtns
+```
+
+```bash Powers of Tau (one-time)
+snarkjs powersoftau new bn128 14 pot14_0000.ptau
+snarkjs powersoftau contribute pot14_0000.ptau pot14_0001.ptau
+snarkjs powersoftau prepare phase2 pot14_0001.ptau pot14_final.ptau
+```
+
+```bash Circuit-specific setup
+snarkjs groth16 setup main.r1cs pot14_final.ptau main_0000.zkey
+snarkjs zkey contribute main_0000.zkey main_final.zkey
+snarkjs zkey export verificationkey main_final.zkey verification_key.json
+```
+
+</CodeGroup>
+
+<Warning>
+Never use test/dummy trusted setup parameters in production. Always use parameters from a proper ceremony.
+</Warning>
+
+## Circuit inputs
+
+Inputs must match the circuit's signal declarations:
+
+### Single signature inputs
+
+```json
+{
+  "M": "12345",
+  "Ax": "17777552123799933955779906779655732241715742912184938656739573121738514868268",
+  "Ay": "2626589144620713026669568689430873010625803728049924121243784502389097019475",
+  "S": "2491...",
+  "R8x": "1234...",
+  "R8y": "5678..."
+}
+```
+
+### Multiple signature inputs
+
+```json
+{
+  "M": "12345",
+  "Ax": ["17777...", "18888...", "19999..."],
+  "Ay": ["26265...", "27776...", "28887..."],
+  "S": ["2491...", "3502...", "4613..."],
+  "R8x": ["1234...", "2345...", "3456..."],
+  "R8y": ["5678...", "6789...", "7890..."]
+}
+```
+
+<Note>
+All numeric values must be strings to handle BigInt values that exceed JavaScript's Number.MAX_SAFE_INTEGER.
+</Note>
+
+## Witness generation
+
+The witness is an intermediate computation used in proof generation:
+
+```typescript circuits/src/client.ts
+// Calculate witness from inputs
+const inputs = {
+  M,
+  Ax,
+  Ay,
+  S,
+  R8x,
+  R8y,
+};
+
+const wtns = await this.calculator.calculateWTNSBin(inputs, 0);
+```
+
+### What is a witness?
+
+The witness contains:
+1. All input signals (public and private)
+2. All intermediate signals computed by the circuit
+3. All output signals
+
+<Info>
+The witness proves you know valid inputs. The ZKP proves the witness is correct without revealing it.
+</Info>
+
+## Proving and verification
+
+### Generate a proof
+
+```typescript
+const { proof } = await snarkjs.groth16.prove(this._zkey, wtns);
+
+return {
+  a: [proof.pi_a[0], proof.pi_a[1]],
+  b: [proof.pi_b[0].reverse(), proof.pi_b[1].reverse()],
+  c: [proof.pi_c[0], proof.pi_c[1]]
+};
+```
+
+### Verify on-chain
+
+```solidity contracts/contracts/ZkApp.sol
+function verify(
+    uint256[7] memory publicSignals,
+    Proof memory proof
+) public view returns (bool) {
+    bool result = IVerifier(verifier).verifyProof(
+        proof.a,
+        proof.b,
+        proof.c,
+        publicSignals
+    );
+    return result;
+}
+```
+
+<Tip>
+The public signals array length must match your circuit's public inputs. For rollup with 3 signatures: `[M, Ax[0], Ax[1], Ax[2], Ay[0], Ay[1], Ay[2]]` = 7 elements.
+</Tip>
+
+## Circuit constraints
+
+Understanding constraints helps optimize circuit design:
+
+### Constraint types
+
+<CardGroup cols={2}>
+  <Card title="Equality constraints" icon="equals">
+    `a === b` - Ensures two signals are equal
+  </Card>
+  <Card title="Multiplication constraints" icon="xmark">
+    `c <== a * b` - Fundamental R1CS constraint
+  </Card>
+  <Card title="Addition (free)" icon="plus">
+    `c <== a + b` - No additional constraints needed
+  </Card>
+  <Card title="Custom constraints" icon="code">
+    Complex operations built from basic constraints
+  </Card>
+</CardGroup>
+
+### EdDSA constraint breakdown
+
+The `EdDSAPoseidonVerifier` uses approximately:
+
+- **Point addition**: ~150 constraints per operation
+- **Scalar multiplication**: ~1,000 constraints
+- **Poseidon hash**: ~300 constraints
+- **Total per signature**: ~1,500 constraints
+
+## Circuit optimization
+
+### Reduce constraint count
+
+```circom
+// ❌ Less efficient: Multiple multiplications
+signal temp1 <== a * b;
+signal temp2 <== temp1 * c;
+signal result <== temp2 * d;
+
+// ✅ More efficient: Combine operations
+signal ab <== a * b;
+signal cd <== c * d;
+signal result <== ab * cd;
+```
+
+### Batch operations
+
+```circom
+// Process multiple items in parallel
+component verifier[n];
+for (var i = 0; i < n; i++) {
+    verifier[i] = EdDSAPoseidonVerifier();
+    // Configure verifier[i]...
+}
+```
+
+<Note>
+Parallel operations in circuits don't reduce constraints but improve proving efficiency.
+</Note>
+
+## Custom circuit templates
+
+You can extend EventConnect with custom logic:
+
+```circom
+template CustomVerification(n) {
+    signal input M;
+    signal input Ax[n];
+    signal input Ay[n];
+    signal input S[n];
+    signal input R8x[n];
+    signal input R8y[n];
+    
+    // Additional custom inputs
+    signal input threshold;  // Minimum required signatures
+    signal output validCount;
+    
+    component verifier[n];
+    component counter = Counter(n);
+    
+    for (var i = 0; i < n; i++) {
+        verifier[i] = EdDSAPoseidonVerifier();
+        // ... configure verifier
+        counter.inputs[i] <== verifier[i].valid;
+    }
+    
+    validCount <== counter.count;
+    // Assert threshold met
+    component thresholdCheck = GreaterEqThan(32);
+    thresholdCheck.in[0] <== validCount;
+    thresholdCheck.in[1] <== threshold;
+    thresholdCheck.out === 1;
+}
+```
+
+## Circomlib components
+
+EventConnect leverages circomlib for standard operations:
+
+### Commonly used components
+
+```circom
+include "circomlib/circuits/comparators.circom";
+include "circomlib/circuits/bitify.circom";
+include "circomlib/circuits/poseidon.circom";
+include "circomlib/circuits/eddsaposeidon.circom";
+
+// Use comparators
+component lt = LessThan(32);
+lt.in[0] <== a;
+lt.in[1] <== b;
+lt.out === 1;  // Assert a < b
+
+// Use Poseidon hash
+component hasher = Poseidon(2);
+hasher.inputs[0] <== field1;
+hasher.inputs[1] <== field2;
+signal hash <== hasher.out;
+```
+
+<Tip>
+Explore the [circomlib documentation](https://github.com/iden3/circomlib) for more components you can use in your circuits.
+</Tip>
+
+## Debugging circuits
+
+### Common errors
+
+<AccordionGroup>
+  <Accordion title="Error: Constraint doesn't match">
+    **Cause**: Input values don't satisfy circuit constraints.
+    
+    **Solution**: Verify inputs are correct and match expected ranges.
+    
+    ```bash
+    # Enable verbose output
+    snarkjs groth16 prove circuit.zkey witness.wtns proof.json public.json --verbose
+    ```
+  </Accordion>
+  
+  <Accordion title="Error: Not same number of signals">
+    **Cause**: Input JSON doesn't match circuit signal declarations.
+    
+    **Solution**: Ensure all required signals are provided with correct names.
+  </Accordion>
+  
+  <Accordion title="Error: Value too large for field">
+    **Cause**: Input exceeds Baby Jubjub field prime.
+    
+    **Solution**: Validate inputs are within field bounds before passing to circuit.
+    
+    ```typescript
+    const FIELD_SIZE = BigInt("21888242871839275222246405745257275088548364400416034343698204186575808495617");
+    if (value >= FIELD_SIZE) {
+      throw new Error("Value exceeds field size");
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Testing circuits
+
+```typescript
+import { wasm } from "circom_tester";
+
+describe("EdDSA Circuit Test", function() {
+  let circuit;
+  
+  before(async () => {
+    circuit = await wasm("circuits/main.circom");
+  });
+  
+  it("Should verify valid signature", async () => {
+    const input = {
+      M: "12345",
+      Ax: pubKey[0],
+      Ay: pubKey[1],
+      S: signature.S,
+      R8x: signature.R8x,
+      R8y: signature.R8y
+    };
+    
+    const witness = await circuit.calculateWitness(input);
+    await circuit.checkConstraints(witness);
+  });
+});
+```
+
+## Performance benchmarks
+
+### Circuit compilation
+
+| Signatures | R1CS Constraints | Compile Time | WASM Size |
+|-----------|-----------------|--------------|----------|
+| 1         | ~1,500          | ~2s          | ~45KB    |
+| 3         | ~4,500          | ~5s          | ~120KB   |
+| 10        | ~15,000         | ~15s         | ~380KB   |
+
+### Proof generation
+
+| Signatures | Proving Time (browser) | Proving Time (Node.js) |
+|-----------|----------------------|----------------------|
+| 1         | ~2s                  | ~1s                  |
+| 3         | ~5s                  | ~3s                  |
+| 10        | ~18s                 | ~10s                 |
+
+<Info>
+Proof generation is faster in Node.js due to better WASM optimization and native module support.
+</Info>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Smart contracts" icon="file-contract" href="smart-contracts">
+    Learn how circuits integrate with Solidity contracts
+  </Card>
+  <Card title="Build a custom circuit" icon="hammer" href="../guides/building-circuits">
+    Create your own circuit from scratch
+  </Card>
+</CardGroup>

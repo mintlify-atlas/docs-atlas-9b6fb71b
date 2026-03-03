@@ -1,0 +1,381 @@
+---
+title: EdDSA signatures
+description: Understand EdDSA signatures and signature rollup in EventConnect
+---
+
+## What are EdDSA signatures?
+
+EdDSA (Edwards-curve Digital Signature Algorithm) is a modern digital signature scheme that uses twisted Edwards curves. EventConnect uses **EdDSA with the Baby Jubjub curve and Poseidon hash**, which is optimized for zero-knowledge proof circuits.
+
+<Info>
+Baby Jubjub is a curve specifically designed for efficient implementation in zk-SNARKs, making it ideal for EventConnect's privacy-preserving architecture.
+</Info>
+
+## Why EdDSA for ZKPs?
+
+Traditional signature schemes like ECDSA are expensive to verify in zero-knowledge circuits. EdDSA with Baby Jubjub offers:
+
+- **Circuit efficiency**: ~1,500 constraints vs ~150,000 for ECDSA
+- **Poseidon hash**: ZK-friendly hash function
+- **Deterministic signatures**: No random nonce generation required
+- **Fast verification**: Both in-circuit and off-circuit
+
+## EdDSA signature structure
+
+An EdDSA signature consists of two components:
+
+```typescript
+export interface EdDSASignature {
+  R8: [Uint8Array, Uint8Array];  // Random point (x, y coordinates)
+  S: bigint;                      // Signature scalar
+}
+```
+
+### Signature components
+
+<Accordion title="R8: Random point">
+  A point on the Baby Jubjub curve, represented as two field elements:
+  - `R8[0]`: X coordinate
+  - `R8[1]`: Y coordinate
+  
+  This point is derived from the private key and message.
+</Accordion>
+
+<Accordion title="S: Signature scalar">
+  A scalar value computed from:
+  - The private key
+  - The random point R8
+  - The message hash
+  
+  This value is used in verification to confirm signature validity.
+</Accordion>
+
+## Creating signatures
+
+The `EdDSA` class handles signature generation:
+
+```typescript
+import { EdDSA } from "circuits/src/eddsa";
+
+// Initialize EdDSA with a private key
+const privKey = "0xABCDEF...";
+const eddsa = new EdDSA(privKey);
+await eddsa.init();
+
+// Sign a message
+const message = BigNumber.from("0x1234");
+const signature = await eddsa.sign(message);
+
+// Access the public key
+const [pubKeyX, pubKeyY] = eddsa.scalarPubKey;
+```
+
+### Initialization process
+
+<Steps>
+  <Step title="Create EdDSA instance">
+    ```typescript
+    const eddsa = new EdDSA(privateKey);
+    ```
+  </Step>
+  <Step title="Initialize cryptographic libraries">
+    ```typescript
+    await eddsa.init(); // Builds Baby Jubjub and EdDSA components
+    ```
+  </Step>
+  <Step title="Derive public key">
+    The public key is automatically derived from the private key during initialization.
+  </Step>
+</Steps>
+
+## Verifying signatures
+
+Signatures can be verified both off-chain and in zero-knowledge circuits:
+
+### Off-chain verification
+
+```typescript
+const isValid = await eddsa.verify(
+  message,
+  signature,
+  eddsa.pubKey
+);
+
+console.log(`Signature valid: ${isValid}`);
+```
+
+### In-circuit verification
+
+The Circom circuit verifies signatures using the `EdDSAPoseidonVerifier` component:
+
+```circom
+component verifier = EdDSAPoseidonVerifier();
+
+verifier.enabled <== 1;
+verifier.Ax <== Ax;      // Public key X
+verifier.Ay <== Ay;      // Public key Y
+verifier.S <== S;        // Signature scalar
+verifier.R8x <== R8x;    // R8 point X
+verifier.R8y <== R8y;    // R8 point Y
+verifier.M <== M;        // Message
+```
+
+<Note>
+The circuit verification doesn't return a boolean - it either succeeds or fails constraint checks. If all constraints pass, the signature is valid.
+</Note>
+
+## Signature rollup
+
+One of EventConnect's powerful features is **signature rollup**: verifying multiple signatures in a single zero-knowledge proof.
+
+### Single signature vs rollup
+
+<CodeGroup>
+
+```typescript Single signature
+const proof = await client.prove({
+  M: message,
+  Ax: pubKey.x,
+  Ay: pubKey.y,
+  S: signature.S,
+  R8x: R8x,
+  R8y: R8y
+});
+```
+
+```typescript Signature rollup (3 signatures)
+const proof = await client.prove({
+  M: message,  // Same message for all
+  Ax: [pubKey1.x, pubKey2.x, pubKey3.x],
+  Ay: [pubKey1.y, pubKey2.y, pubKey3.y],
+  S: [sig1.S, sig2.S, sig3.S],
+  R8x: [sig1.R8x, sig2.R8x, sig3.R8x],
+  R8y: [sig1.R8y, sig2.R8y, sig3.R8y]
+});
+```
+
+</CodeGroup>
+
+### Rollup circuit architecture
+
+The rollup circuit uses a loop to verify multiple signatures:
+
+```circom
+template Sample(n) {  // n = number of signatures
+    signal input M;
+    signal input Ax[n];
+    signal input Ay[n];
+    signal input S[n];
+    signal input R8x[n];
+    signal input R8y[n];
+
+    component verifier[n];
+    for (var i = 0; i < n; i++) {
+        verifier[i] = EdDSAPoseidonVerifier();
+        verifier[i].enabled <== 1;
+        verifier[i].Ax <== Ax[i];
+        verifier[i].Ay <== Ay[i];
+        verifier[i].S <== S[i];
+        verifier[i].R8x <== R8x[i];
+        verifier[i].R8y <== R8y[i];
+        verifier[i].M <== M;
+    }
+}
+
+component main { public [M, Ax, Ay] } = Sample(3);
+```
+
+<Tip>
+The parameter `n` is set at compile time. You'll need to recompile your circuit if you want to verify a different number of signatures.
+</Tip>
+
+## Use cases for signature rollup
+
+### Multi-signature wallets
+
+Verify that multiple parties signed a transaction:
+
+```typescript
+// 3-of-3 multisig
+const account1 = await new EdDSA(privKey1).init();
+const account2 = await new EdDSA(privKey2).init();
+const account3 = await new EdDSA(privKey3).init();
+
+const transaction = BigNumber.from("0xABCD");
+
+const sig1 = await account1.sign(transaction);
+const sig2 = await account2.sign(transaction);
+const sig3 = await account3.sign(transaction);
+
+// Generate single proof for all signatures
+const proof = await client.prove({
+  M: transaction.toBigInt(),
+  Ax: [account1, account2, account3].map(a => a.scalarPubKey[0]),
+  Ay: [account1, account2, account3].map(a => a.scalarPubKey[1]),
+  S: [sig1.S, sig2.S, sig3.S],
+  R8x: [sig1, sig2, sig3].map(s => F.toObject(s.R8[0])),
+  R8y: [sig1, sig2, sig3].map(s => F.toObject(s.R8[1]))
+});
+```
+
+### Event attestations
+
+Multiple witnesses sign the same event:
+
+```typescript
+const eventHash = hashEvent({
+  type: "TRANSFER",
+  from: "0x123...",
+  to: "0x456...",
+  amount: "1000"
+});
+
+const witnessSignatures = await Promise.all(
+  witnesses.map(w => w.sign(eventHash))
+);
+
+// Prove all witnesses signed the event
+const proof = await client.prove({
+  M: eventHash,
+  // ... all witness public keys and signatures
+});
+```
+
+### Threshold signatures
+
+Verify k-of-n signatures without revealing which k:
+
+<Info>
+By carefully designing your circuit, you can implement threshold logic where only k out of n signatures need to be valid, while keeping the signers anonymous.
+</Info>
+
+## Working with Baby Jubjub
+
+EventConnect uses the Baby Jubjub elliptic curve for EdDSA signatures:
+
+```typescript
+import { buildBabyjub } from "circomlibjs";
+
+const babyjub = await buildBabyjub();
+
+// Baby Jubjub field operations
+const F = babyjub.F;
+const fieldElement = F.e("12345"); // Create field element
+const objectValue = F.toObject(fieldElement); // Convert to BigInt
+```
+
+### Key properties
+
+<CardGroup cols={2}>
+  <Card title="Prime field" icon="calculator">
+    p = 21888242871839275222246405745257275088548364400416034343698204186575808495617
+  </Card>
+  <Card title="Curve equation" icon="function">
+    ax² + y² = 1 + dx²y²
+  </Card>
+  <Card title="Base point order" icon="arrow-up-1-9">
+    Large prime order ensuring security
+  </Card>
+  <Card title="Circuit-friendly" icon="microchip">
+    Optimized for zk-SNARK constraints
+  </Card>
+</CardGroup>
+
+## Converting signature components
+
+When preparing inputs for the ZKP circuit, convert signature components properly:
+
+```typescript
+const signature = await eddsa.sign(message);
+const F = client.babyjub.F;
+
+// Convert R8 point to circuit-friendly format
+const R8x = F.toObject(signature.R8[0]); // Uint8Array -> BigInt
+const R8y = F.toObject(signature.R8[1]);
+
+// S is already a BigInt
+const S = signature.S;
+
+// Use in proof generation
+const proof = await client.prove({
+  M: message,
+  Ax: pubKeyX,
+  Ay: pubKeyY,
+  S: S,
+  R8x: R8x,
+  R8y: R8y
+});
+```
+
+<Warning>
+Always ensure field elements are within the Baby Jubjub field prime. Invalid field elements will cause circuit failures.
+</Warning>
+
+## Security considerations
+
+### Private key management
+
+```typescript
+// ✅ Good: Use secure key generation
+const privKey = randomBytes(32);
+const eddsa = new EdDSA(ethers.utils.hexlify(privKey));
+
+// ❌ Bad: Weak or predictable keys
+const weakKey = "0x1111"; // Only for testing!
+```
+
+### Message hashing
+
+For complex messages, hash them before signing:
+
+```typescript
+import { buildPoseidon } from "circomlibjs";
+
+const poseidon = await buildPoseidon();
+const messageHash = poseidon([field1, field2, field3]);
+const signature = await eddsa.sign(messageHash);
+```
+
+### Signature verification
+
+Always verify signatures after generation:
+
+```typescript
+const signature = await eddsa.sign(message);
+if (!await eddsa.verify(message, signature, eddsa.pubKey)) {
+  throw new Error("Generated invalid signature");
+}
+```
+
+## Performance considerations
+
+### Circuit size scaling
+
+Each additional signature in a rollup adds approximately:
+- **1,500 constraints** per signature
+- **~2 seconds** to proof generation time (on average hardware)
+- **Constant gas cost** for on-chain verification
+
+<Tip>
+For optimal performance, batch 3-10 signatures per proof. Larger batches increase proving time significantly.
+</Tip>
+
+### Proof generation time
+
+| Signatures | Constraints | Proving time |
+|-----------|-------------|-------------|
+| 1         | ~1,500      | ~1-2s       |
+| 3         | ~4,500      | ~3-5s       |
+| 10        | ~15,000     | ~10-15s     |
+| 100       | ~150,000    | ~2-3min     |
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Circuits" icon="circle-nodes" href="circuits">
+    Dive into the Circom circuit architecture
+  </Card>
+  <Card title="EdDSA API reference" icon="code" href="../api/circuits/eddsa">
+    Complete EdDSA class documentation
+  </Card>
+</CardGroup>

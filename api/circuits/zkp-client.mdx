@@ -1,0 +1,199 @@
+---
+title: ZKPClient
+description: Client for generating zero-knowledge proofs using Groth16
+---
+
+## Overview
+
+The `ZKPClient` class provides functionality for generating zero-knowledge proofs using the Groth16 proving system. It manages the witness calculator, BabyJubJub curve operations, and zKey for proof generation.
+
+## Constructor
+
+```typescript
+const client = new ZKPClient();
+```
+
+Creates a new ZKPClient instance. The instance must be initialized with `init()` before use.
+
+## Properties
+
+### initialized
+
+```typescript
+get initialized(): boolean
+```
+
+Returns `true` if the client has been initialized with a WASM file and zKey, `false` otherwise.
+
+<ResponseField name="initialized" type="boolean">
+  Indicates whether the client is ready to generate proofs
+</ResponseField>
+
+### babyjub
+
+```typescript
+get babyjub(): any
+```
+
+Returns the initialized BabyJubJub curve instance.
+
+<ResponseField name="babyjub" type="any">
+  The BabyJubJub elliptic curve implementation from circomlibjs
+</ResponseField>
+
+<Warning>
+  Throws an error if accessed before initialization: "Not initialized"
+</Warning>
+
+### calculator
+
+```typescript
+get calculator(): any
+```
+
+Returns the initialized witness calculator.
+
+<ResponseField name="calculator" type="any">
+  The witness calculator built from the WASM file
+</ResponseField>
+
+<Warning>
+  Throws an error if accessed before initialization: "Not initialized"
+</Warning>
+
+## Methods
+
+### init()
+
+Initializes the ZKP client with the required circuit files.
+
+```typescript
+async init(wasm: Buffer, zKey: Buffer): Promise<ZKPClient>
+```
+
+<ParamField path="wasm" type="Buffer" required>
+  The compiled circuit WASM file buffer
+</ParamField>
+
+<ParamField path="zKey" type="Buffer" required>
+  The zKey file buffer containing proving and verification keys
+</ParamField>
+
+<ResponseField name="return" type="Promise<ZKPClient>">
+  Returns the initialized ZKPClient instance for method chaining
+</ResponseField>
+
+<Note>
+  Calling `init()` multiple times on an already initialized instance will return the instance without re-initializing.
+</Note>
+
+**Example**
+
+```typescript
+import { ZKPClient } from 'circuits';
+import fs from 'fs';
+import path from 'path';
+
+const wasm = fs.readFileSync(
+  path.join(__dirname, './circuits/main_js/main.wasm')
+);
+const zkey = fs.readFileSync(
+  path.join(__dirname, './zkeys/main.zkey')
+);
+
+const client = await new ZKPClient().init(wasm, zkey);
+```
+
+### prove()
+
+Generates a zero-knowledge proof for an EdDSA signature verification.
+
+```typescript
+async prove(inputs: ProveInputs): Promise<Proof>
+```
+
+<ParamField path="inputs" type="ProveInputs" required>
+  The circuit inputs for proof generation
+</ParamField>
+
+<ParamField path="inputs.M" type="bigint" required>
+  The message that was signed
+</ParamField>
+
+<ParamField path="inputs.Ax" type="bigint" required>
+  The x-coordinate of the public key point
+</ParamField>
+
+<ParamField path="inputs.Ay" type="bigint" required>
+  The y-coordinate of the public key point
+</ParamField>
+
+<ParamField path="inputs.S" type="bigint" required>
+  The S component of the EdDSA signature
+</ParamField>
+
+<ParamField path="inputs.R8x" type="bigint" required>
+  The x-coordinate of the R8 point from the signature
+</ParamField>
+
+<ParamField path="inputs.R8y" type="bigint" required>
+  The y-coordinate of the R8 point from the signature
+</ParamField>
+
+<ResponseField name="return" type="Promise<Proof>">
+  A Groth16 proof containing the `a`, `b`, and `c` points
+</ResponseField>
+
+<Note>
+  This method is customized for EdDSA signature verification circuits. You may need to modify it for different circuit designs.
+</Note>
+
+**Example**
+
+```typescript
+import { ZKPClient, EdDSA } from 'circuits';
+import { BigNumber } from 'ethers';
+
+const privKey = '0xABCDEF12ABCDEF12ABCDEF12ABCDEF12ABCDEF12ABCDEF12ABCDEF12ABCDEF12';
+const eddsa = await new EdDSA(privKey).init();
+
+const message = BigNumber.from(
+  '0xABCDEF00ABCDEF00ABCDEF00ABCDEF00ABCDEF00ABCDEF00ABCDEF00ABCDEF00'
+);
+const signature = await eddsa.sign(message);
+
+const proof = await client.prove({
+  M: message.toBigInt(),
+  Ax: eddsa.scalarPubKey[0],
+  Ay: eddsa.scalarPubKey[1],
+  S: signature.S,
+  R8x: eddsa.babyjub.F.toObject(signature.R8[0]),
+  R8y: eddsa.babyjub.F.toObject(signature.R8[1]),
+});
+```
+
+## Types
+
+### Proof
+
+```typescript
+interface Proof {
+  a: [bigint, bigint];
+  b: [[bigint, bigint], [bigint, bigint]];
+  c: [bigint, bigint];
+}
+```
+
+Represents a Groth16 zero-knowledge proof with three elliptic curve points:
+
+<ParamField path="a" type="[bigint, bigint]">
+  The first proof point (x, y coordinates)
+</ParamField>
+
+<ParamField path="b" type="[[bigint, bigint], [bigint, bigint]]">
+  The second proof point in G2 (two coordinate pairs)
+</ParamField>
+
+<ParamField path="c" type="[bigint, bigint]">
+  The third proof point (x, y coordinates)
+</ParamField>

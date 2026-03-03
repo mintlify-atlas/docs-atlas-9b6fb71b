@@ -1,0 +1,361 @@
+---
+title: Frontend integration
+description: Integrate zero-knowledge proofs with your React frontend
+---
+
+## Overview
+
+This guide shows you how to integrate zkApp functionality into a React frontend, including wallet connection, proof generation, and smart contract interaction.
+
+## Setup
+
+### Install dependencies
+
+Your React app needs these key dependencies:
+
+```json
+{
+  "dependencies": {
+    "@usedapp/core": "^1.0.0",
+    "circuits": "^0.1.0",
+    "ethers": "^5.6.4"
+  }
+}
+```
+
+### Configure circuit client
+
+Create a hook to initialize the ZKP client:
+
+```typescript
+import { useEffect, useState } from "react";
+import { ZKPClient } from "circuits";
+
+let cache: ZKPClient | undefined;
+
+function useCircuit(): {
+  client?: ZKPClient;
+} {
+  const [client, setClient] = useState<ZKPClient>();
+
+  useEffect(() => {
+    if (!cache) {
+      Promise.all([
+        fetch(`${process.env.PUBLIC_URL}/main.wasm`).then((res) =>
+          res.arrayBuffer()
+        ),
+        fetch(`${process.env.PUBLIC_URL}/main.zkey`).then((res) =>
+          res.arrayBuffer()
+        ),
+      ]).then(([wasm, zkey]) => {
+        new ZKPClient()
+          .init(Buffer.from(wasm), Buffer.from(zkey))
+          .then((_client) => {
+            if (!cache) {
+              cache = _client;
+            }
+            setClient(_client);
+          });
+      });
+    } else {
+      setClient(cache);
+    }
+  }, []);
+
+  return { client };
+}
+
+export default useCircuit;
+```
+
+<Note>
+Make sure `main.wasm` and `main.zkey` files are copied to your `public/` directory during the circuit build process.
+</Note>
+
+## EdDSA signature generation
+
+### Create EdDSA hook
+
+```typescript
+import { useEffect, useState } from "react";
+import { EdDSA } from "circuits";
+
+let cache: EdDSA | undefined;
+
+function useEdDSA(privKey?: string): {
+  eddsa?: EdDSA;
+  pubKey?: [bigint, bigint]
+} {
+  const [eddsa, setEdDSA] = useState<EdDSA>();
+
+  useEffect(() => {
+    if (!cache && !!privKey) {
+      new EdDSA(privKey).init().then((_eddsa) => {
+        if (!cache) {
+          cache = _eddsa;
+        }
+        setEdDSA(_eddsa);
+      });
+    } else {
+      setEdDSA(cache);
+    }
+  }, [privKey]);
+
+  return { eddsa, pubKey: eddsa?.scalarPubKey };
+}
+
+export default useEdDSA;
+```
+
+### Sign messages component
+
+```typescript
+import { EdDSASignature } from "circuits/src/eddsa";
+import useEdDSA from "../hooks/useEdDSA";
+import { BigNumberish } from "ethers";
+
+function SignEdDSA({
+  privKey,
+  message,
+  onResult,
+}: {
+  message: BigNumberish;
+  privKey?: string;
+  onResult: (signature: EdDSASignature) => void;
+}) {
+  const { eddsa } = useEdDSA(privKey);
+  
+  return (
+    <div>
+      <button
+        disabled={!eddsa}
+        onClick={async () => {
+          if (!eddsa) alert("EdDSA is not set");
+          else {
+            eddsa.sign(message).then(onResult);
+          }
+        }}
+      >
+        Create EdDSA sig
+      </button>
+    </div>
+  );
+}
+
+export default SignEdDSA;
+```
+
+## Proof generation
+
+Create a component to generate zero-knowledge proofs:
+
+```typescript
+import { Proof } from "circuits";
+import { EdDSASignature } from "circuits/src/eddsa";
+import useCircuit from "../hooks/useCircuit";
+
+function GenZKP({
+  signature,
+  message,
+  pubKey,
+  onResult,
+}: {
+  message: bigint;
+  pubKey?: [bigint, bigint];
+  signature?: EdDSASignature;
+  onResult: (proof: Proof) => void;
+}) {
+  const { client } = useCircuit();
+  
+  return (
+    <div>
+      <button
+        disabled={!client || !pubKey || !signature}
+        onClick={async () => {
+          if (!client) alert("Client is not ready");
+          else if (!pubKey) alert("EdDSA pubkey is not ready");
+          else if (!signature) alert("EdDSA signature is not ready");
+          else {
+            client
+              .prove({
+                M: message,
+                Ax: pubKey[0],
+                Ay: pubKey[1],
+                S: signature.S,
+                R8x: client.babyjub.F.toObject(signature.R8[0]),
+                R8y: client.babyjub.F.toObject(signature.R8[1]),
+              })
+              .then(onResult);
+          }
+        }}
+      >
+        Create zkp
+      </button>
+    </div>
+  );
+}
+
+export default GenZKP;
+```
+
+## Contract interaction
+
+### Create contract hooks
+
+```typescript
+import { useMemo, useCallback, useEffect, useState } from "react";
+import { useEthers } from "@usedapp/core";
+import { ZkApp__factory } from "contracts";
+import { BigNumber, BigNumberish } from "ethers";
+
+export const useZKApp = (address: string) => {
+  const { account, library, chainId } = useEthers();
+  const signer = account ? library?.getSigner(account) : undefined;
+  
+  return useMemo(() => {
+    if (!library) return undefined;
+    const _contract = ZkApp__factory.connect(address, library);
+    return signer ? _contract.connect(signer) : _contract;
+  }, [library, address, signer, chainId]);
+};
+
+export const useTotalRecords = (address: string) => {
+  const zkApp = useZKApp(address);
+  const [totalRecords, setTotalRecords] = useState<BigNumber>();
+  const { library, chainId } = useEthers();
+
+  const fetchTotalRecords = useCallback(async () => {
+    if (!zkApp) return;
+    const _totalRecords = await zkApp.totalRecords();
+    setTotalRecords(_totalRecords);
+  }, [zkApp]);
+
+  useEffect(() => {
+    fetchTotalRecords();
+    library?.on("block", fetchTotalRecords);
+    return () => {
+      library?.off("block", fetchTotalRecords);
+    };
+  }, [address, library, chainId, fetchTotalRecords]);
+
+  return totalRecords;
+};
+```
+
+### Send transaction component
+
+```typescript
+import { Proof } from "circuits";
+import { useRecord } from "../hooks/useContract";
+
+function SendTx({
+  address,
+  publicSignals,
+  proof,
+}: {
+  address: string;
+  publicSignals?: [bigint, bigint, bigint];
+  proof?: Proof;
+}) {
+  const { txState, record } = useRecord(address);
+  
+  return (
+    <div>
+      <p>Tx state: {txState}</p>
+      <button
+        disabled={!publicSignals || !proof || !record}
+        onClick={() => {
+          if (!publicSignals) alert("Public signals are not ready");
+          else if (!proof) alert("ZKP is not ready");
+          else if (!record) alert("Wallet is not connected");
+          else {
+            record({
+              publicSignals,
+              proof,
+            });
+          }
+        }}
+      >
+        Send zkp transaction
+      </button>
+    </div>
+  );
+}
+
+export default SendTx;
+```
+
+## Complete workflow
+
+Putting it all together in your main App component:
+
+```typescript
+import { useState } from "react";
+import { BigNumber } from "ethers";
+import { Proof } from "circuits";
+import { EdDSASignature } from "circuits/src/eddsa";
+import Connect from "./components/Connect";
+import Deploy from "./components/Deploy";
+import Viewer from "./components/Viewer";
+import SignEdDSA from "./components/SignEdDSA";
+import GenZKP from "./components/GenZKP";
+import SendTx from "./components/SendTx";
+import useEdDSA from "./hooks/useEdDSA";
+
+const msgToSign = BigNumber.from("0x1234").toBigInt();
+
+function App() {
+  const { account } = useEthers();
+  const privKey = account || undefined;
+  const { pubKey } = useEdDSA(privKey);
+  const [eddsaSignature, setEdDSASignature] = useState<EdDSASignature>();
+  const [proof, setProof] = useState<Proof>();
+  const [deployed, setDeployed] = useState<string>();
+  
+  return (
+    <div className="App">
+      <h1>ZKP App Boilerplate</h1>
+      <h2>Step 1. Connect your wallet</h2>
+      <Connect />
+      
+      <h2>Step 2. Deploy smart contracts</h2>
+      <Deploy onResult={setDeployed} />
+      
+      <h2>Step 3. Check the data fetch from the smart contract</h2>
+      {deployed ? <Viewer address={deployed} /> : <p>Not deployed</p>}
+      
+      <h2>Step 4. Prepare zkp signals</h2>
+      <SignEdDSA
+        privKey={privKey}
+        message={msgToSign}
+        onResult={(result) => setEdDSASignature(result)}
+      />
+      
+      <h2>Step 5. Compute a zk proof</h2>
+      <GenZKP
+        message={msgToSign}
+        pubKey={pubKey}
+        signature={eddsaSignature}
+        onResult={(result) => setProof(result)}
+      />
+      
+      <h2>Step 6. Interact with smart contract using the generated proof</h2>
+      {deployed ? (
+        <SendTx
+          address={deployed}
+          publicSignals={pubKey ? [msgToSign, ...pubKey] : undefined}
+          proof={proof}
+        />
+      ) : (
+        <p>Not deployed</p>
+      )}
+    </div>
+  );
+}
+
+export default App;
+```
+
+<Warning>
+Always validate that the circuit client is initialized before attempting to generate proofs, as the WASM and zkey files can take time to load.
+</Warning>

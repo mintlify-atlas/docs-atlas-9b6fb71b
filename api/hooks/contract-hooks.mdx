@@ -1,0 +1,201 @@
+---
+title: Contract hooks
+description: React hooks for interacting with EventConnect smart contracts
+---
+
+## useZKApp
+
+Connects to a ZK application contract instance with automatic signer detection.
+
+```typescript
+function useZKApp(address: string): ZkApp | undefined
+```
+
+<ParamField path="address" type="string" required>
+  The contract address to connect to
+</ParamField>
+
+<ResponseField name="contract" type="ZkApp | undefined">
+  Connected contract instance with signer if wallet is connected, read-only instance otherwise
+</ResponseField>
+
+<Note>
+  The contract instance automatically updates when the chain ID or signer changes.
+</Note>
+
+```tsx
+import { useZKApp } from "../hooks/useContract";
+
+function MyComponent({ address }: { address: string }) {
+  const zkApp = useZKApp(address);
+  
+  // Use zkApp to call contract methods
+  const handleClick = async () => {
+    if (zkApp) {
+      const verifier = await zkApp.verifier();
+    }
+  };
+}
+```
+
+## useVerifier
+
+Fetches the verifier contract address from a ZK application contract.
+
+```typescript
+function useVerifier(address: string): string | undefined
+```
+
+<ParamField path="address" type="string" required>
+  The ZK application contract address
+</ParamField>
+
+<ResponseField name="verifier" type="string | undefined">
+  The verifier contract address, or undefined while fetching
+</ResponseField>
+
+<Note>
+  This hook fetches data once when the component is rendered and re-fetches when the address, library, or chain ID changes.
+</Note>
+
+```tsx
+import { useVerifier } from "../hooks/useContract";
+
+function VerifierDisplay({ address }: { address: string }) {
+  const verifier = useVerifier(address);
+  
+  return <div>Verifier: {verifier || "Loading..."}</div>;
+}
+```
+
+## useTotalRecords
+
+Fetches the total number of records stored in a ZK application contract.
+
+```typescript
+function useTotalRecords(address: string): BigNumber | undefined
+```
+
+<ParamField path="address" type="string" required>
+  The ZK application contract address
+</ParamField>
+
+<ResponseField name="totalRecords" type="BigNumber | undefined">
+  The total number of records, or undefined while fetching
+</ResponseField>
+
+<Note>
+  This hook fetches data every block when the component is mounted. It automatically sets up and cleans up block listeners.
+</Note>
+
+```tsx
+import { useTotalRecords } from "../hooks/useContract";
+
+function Viewer({ address }: { address: string }) {
+  const totalRecords = useTotalRecords(address);
+  return <div>Total records: {totalRecords?.toString() || "fetching..."}</div>;
+}
+```
+
+## useRecord
+
+Provides a function to submit zero-knowledge proofs to the contract and tracks transaction state.
+
+```typescript
+function useRecord(address: string): {
+  txState: TxState;
+  record: ((params: RecordParams) => Promise<void>) | undefined;
+}
+```
+
+<ParamField path="address" type="string" required>
+  The ZK application contract address
+</ParamField>
+
+<ResponseField name="txState" type="TxState">
+  Current transaction state. Possible values:
+  - `NONE` - No transaction initiated
+  - `PENDING` - Transaction submitted and waiting for confirmation
+  - `CONFIRMED` - Transaction confirmed on-chain
+  - `FAILED` - Transaction failed during execution
+  - `CANCELLED` - Transaction cancelled by user
+</ResponseField>
+
+<ResponseField name="record" type="function | undefined">
+  Function to submit a proof, or undefined if wallet is not connected. Returns a promise that resolves when the transaction is submitted.
+</ResponseField>
+
+### Record parameters
+
+<ParamField path="publicSignals" type="[BigNumberish, BigNumberish, BigNumberish]" required>
+  Array of three public signals for the zero-knowledge proof
+</ParamField>
+
+<ParamField path="proof" type="object" required>
+  The zero-knowledge proof object containing:
+  
+  <ParamField path="proof.a" type="[BigNumberish, BigNumberish]" required>
+    First component of the proof
+  </ParamField>
+  
+  <ParamField path="proof.b" type="[[BigNumberish, BigNumberish], [BigNumberish, BigNumberish]]" required>
+    Second component of the proof (2D array)
+  </ParamField>
+  
+  <ParamField path="proof.c" type="[BigNumberish, BigNumberish]" required>
+    Third component of the proof
+  </ParamField>
+</ParamField>
+
+```tsx
+import { useRecord } from "../hooks/useContract";
+import { Proof } from "circuits";
+
+function SendTx({
+  address,
+  publicSignals,
+  proof,
+}: {
+  address: string;
+  publicSignals?: [bigint, bigint, bigint];
+  proof?: Proof;
+}) {
+  const { txState, record } = useRecord(address);
+  
+  return (
+    <div>
+      <p>Tx state: {txState}</p>
+      <button
+        disabled={!publicSignals || !proof || !record}
+        onClick={() => {
+          if (!publicSignals) alert("Public signals are not ready");
+          else if (!proof) alert("ZKP is not ready");
+          else if (!record) alert("Wallet is not connected");
+          else {
+            record({
+              publicSignals,
+              proof,
+            });
+          }
+        }}
+      >
+        Send zkp transaction
+      </button>
+    </div>
+  );
+}
+```
+
+## TxState
+
+Enum representing transaction states.
+
+```typescript
+enum TxState {
+  NONE = "NONE",
+  PENDING = "PENDING",
+  CONFIRMED = "CONFIRMED",
+  FAILED = "FAILED",
+  CANCELLED = "CANCELLED",
+}
+```

@@ -1,0 +1,260 @@
+---
+title: Deploying contracts
+description: Deploy and verify zero-knowledge proof smart contracts
+---
+
+## Overview
+
+After building your circuits, you need to deploy the verifier and application contracts to interact with your zero-knowledge proofs on-chain.
+
+## Contract structure
+
+The main smart contract integrates with the generated verifier:
+
+```solidity
+//SPDX-License-Identifier: GPL-3.0-or-later
+pragma solidity >=0.8.0;
+
+interface IVerifier {
+    function verifyProof(
+        uint256[2] memory a,
+        uint256[2][2] memory b,
+        uint256[2] memory c,
+        uint256[3] memory input
+    ) external view returns (bool r);
+}
+
+contract ZkApp {
+    struct Proof {
+        uint256[2] a;
+        uint256[2][2] b;
+        uint256[2] c;
+    }
+
+    address public immutable verifier;
+    uint256[3][] public records;
+
+    constructor(address verifier_) {
+        verifier = verifier_;
+    }
+
+    function record(uint256[3] memory publicSignals, Proof memory proof)
+        public
+    {
+        require(verify(publicSignals, proof), "SNARK verification failed");
+        records.push(publicSignals);
+    }
+
+    function verify(uint256[3] memory publicSignals, Proof memory proof)
+        public
+        view
+        returns (bool)
+    {
+        bool result = IVerifier(verifier).verifyProof(
+            proof.a,
+            proof.b,
+            proof.c,
+            publicSignals
+        );
+        return result;
+    }
+
+    function totalRecords() public view returns (uint256) {
+        return records.length;
+    }
+}
+```
+
+## Building contracts
+
+<Steps>
+  <Step title="Install dependencies">
+    Install all required packages:
+
+    <CodeGroup>
+    ```bash npm
+    npm install
+    ```
+
+    ```bash yarn
+    yarn install
+    ```
+
+    ```bash pnpm
+    pnpm install
+    ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Compile contracts">
+    Compile your Solidity contracts and generate TypeChain types:
+
+    <CodeGroup>
+    ```bash npm
+    npm run build
+    ```
+
+    ```bash yarn
+    yarn workspace contracts build
+    ```
+
+    ```bash pnpm
+    pnpm --filter contracts build
+    ```
+    </CodeGroup>
+
+    This runs `hardhat compile` and generates TypeScript types for contract interaction.
+  </Step>
+
+  <Step title="Run tests">
+    Test your contracts before deployment:
+
+    <CodeGroup>
+    ```bash npm
+    npm run test
+    ```
+
+    ```bash yarn
+    yarn workspace contracts test
+    ```
+
+    ```bash pnpm
+    pnpm --filter contracts test
+    ```
+    </CodeGroup>
+  </Step>
+</Steps>
+
+<Note>
+Make sure you've built the circuits first, as the contract tests depend on the generated verifier contract.
+</Note>
+
+## Testing contracts
+
+Here's an example test that verifies the full integration:
+
+```typescript
+import { ethers } from "hardhat";
+import { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers";
+import { Verifier__factory, ZkApp, ZkApp__factory } from "../typechain";
+import { ZKPClient } from "circuits";
+import { EdDSA } from "circuits/src/eddsa";
+import { BigNumber } from "ethers";
+import fs from "fs";
+import path from "path";
+
+describe("Test ZKP contract", function () {
+  let zkApp: ZkApp;
+  let deployer: SignerWithAddress;
+  let client: ZKPClient;
+  let eddsa: EdDSA;
+
+  this.beforeEach(async () => {
+    [deployer] = await ethers.getSigners();
+    const verifier = await new Verifier__factory(deployer).deploy();
+    eddsa = await new EdDSA("0xABCD...").init();
+    zkApp = await new ZkApp__factory(deployer).deploy(verifier.address);
+    
+    client = await new ZKPClient().init(
+      fs.readFileSync("../circuits/zk/circuits/main_js/main.wasm"),
+      fs.readFileSync("../circuits/zk/zkeys/main.zkey")
+    );
+  });
+
+  it("Should able to create a zkp and verify them", async function () {
+    const msg = BigNumber.from("0xabcd");
+    const signature = await eddsa.sign(msg);
+    
+    const proof = await client.prove({
+      M: msg.toBigInt(),
+      Ax: eddsa.scalarPubKey[0],
+      Ay: eddsa.scalarPubKey[1],
+      S: signature.S,
+      R8x: eddsa.babyjub.F.toObject(signature.R8[0]),
+      R8y: eddsa.babyjub.F.toObject(signature.R8[1]),
+    });
+    
+    expect(
+      await zkApp.verify(
+        [msg, eddsa.scalarPubKey[0], eddsa.scalarPubKey[1]],
+        proof
+      )
+    ).to.eq(true);
+  });
+});
+```
+
+## Deployment
+
+<Steps>
+  <Step title="Configure network">
+    Set up your network configuration in `hardhat.config.ts`:
+
+    ```typescript
+    networks: {
+      localhost: {
+        url: "http://127.0.0.1:8545"
+      },
+      sepolia: {
+        url: process.env.SEPOLIA_URL || "",
+        accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : []
+      }
+    }
+    ```
+  </Step>
+
+  <Step title="Start local node (optional)">
+    For local development, start a Hardhat node:
+
+    <CodeGroup>
+    ```bash npm
+    npm run start-local-node
+    ```
+
+    ```bash yarn
+    yarn workspace contracts start-local-node
+    ```
+
+    ```bash pnpm
+    pnpm --filter contracts start-local-node
+    ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Deploy contracts">
+    Deploy using Hardhat tasks:
+
+    ```bash
+    npx hardhat deploy:bandada --network localhost
+    ```
+
+    Or create a custom deployment script in `scripts/`.
+  </Step>
+</Steps>
+
+## Adjusting public inputs
+
+<Warning>
+When modifying your circuit's public inputs, you must update the input array length in both `IVerifier` interface and the verify function.
+</Warning>
+
+For example, changing from 3 to 7 public inputs:
+
+```solidity
+interface IVerifier {
+    function verifyProof(
+        uint256[2] memory a,
+        uint256[2][2] memory b,
+        uint256[2] memory c,
+        uint256[7] memory input  // Changed from [3] to [7]
+    ) external view returns (bool r);
+}
+```
+
+## Available scripts
+
+- `compile`: Compile contracts with Hardhat
+- `test`: Run contract tests
+- `test:coverage`: Generate coverage report
+- `test:report-gas`: Report gas usage in tests
+- `lint`: Lint Solidity files with Solhint

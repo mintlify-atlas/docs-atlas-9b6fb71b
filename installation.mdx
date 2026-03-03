@@ -1,0 +1,381 @@
+---
+title: Installation
+description: Set up your development environment for EventConnect zkApp development
+---
+
+# Installation
+
+This guide walks you through setting up a complete development environment for EventConnect. You'll install all required dependencies and verify your setup is working correctly.
+
+## Prerequisites
+
+EventConnect requires several system-level dependencies. Install these before proceeding:
+
+### Node.js
+
+EventConnect requires **Node.js version 16.x** specifically:
+
+<CodeGroup>
+
+```bash Using nvm (recommended)
+# Install nvm if you don't have it
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+
+# Install Node.js 16
+nvm install 16
+nvm use 16
+
+# Verify version
+node --version  # Should output v16.x.x
+```
+
+```bash Direct download
+# Download from nodejs.org
+# Visit: https://nodejs.org/en/download/
+# Select version 16.x LTS
+
+# Verify installation
+node --version
+npm --version
+```
+
+</CodeGroup>
+
+<Warning>
+  EventConnect does not support Node.js 17 or higher due to OpenSSL compatibility issues in some cryptographic libraries. You must use Node.js 16.x.
+</Warning>
+
+### Rust
+
+Rust is required for building cryptographic dependencies:
+
+```bash
+# Install Rust using rustup
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Follow the prompts, then reload your shell
+source $HOME/.cargo/env
+
+# Verify installation
+rustc --version
+cargo --version
+```
+
+### Circom
+
+Circom is the circuit compiler for zero-knowledge proofs. Install version 2.0 or higher:
+
+<Steps>
+  <Step title="Clone the Circom repository">
+    ```bash
+    git clone https://github.com/iden3/circom.git
+    cd circom
+    ```
+  </Step>
+  
+  <Step title="Build and install Circom">
+    ```bash
+    cargo build --release
+    cargo install --path circom
+    ```
+    
+    This compiles Circom from source and installs it to `~/.cargo/bin/`.
+  </Step>
+  
+  <Step title="Verify installation">
+    ```bash
+    circom --version
+    ```
+    
+    Should output `circom compiler 2.0.0` or higher.
+  </Step>
+</Steps>
+
+<Info>
+  If `circom` is not found after installation, add `~/.cargo/bin` to your PATH:
+  ```bash
+  export PATH="$HOME/.cargo/bin:$PATH"
+  ```
+  Add this line to your `~/.bashrc` or `~/.zshrc` to make it permanent.
+</Info>
+
+### Yarn package manager
+
+EventConnect uses Yarn for workspace management:
+
+```bash
+# Install Yarn globally
+npm install -g yarn
+
+# Verify installation
+yarn --version
+```
+
+## Install EventConnect
+
+Once prerequisites are ready, set up the EventConnect project:
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/wanseob/zkp-app-boilerplate
+    cd zkp-app-boilerplate
+    ```
+  </Step>
+  
+  <Step title="Install dependencies">
+    ```bash
+    yarn
+    ```
+    
+    This installs all dependencies for the three workspaces:
+    - `circuits` - Circuit development tools
+    - `contracts` - Smart contract development tools
+    - `app` - React frontend dependencies
+  </Step>
+  
+  <Step title="Verify workspace structure">
+    ```bash
+    ls -la
+    ```
+    
+    You should see:
+    ```
+    app/           # React frontend application
+    circuits/      # Circom circuits and proof generation
+    contracts/     # Solidity smart contracts
+    package.json   # Root workspace configuration
+    node_modules/  # Shared dependencies
+    ```
+  </Step>
+</Steps>
+
+## Package details
+
+Here's what gets installed in each workspace:
+
+### Circuits workspace
+
+The `circuits` workspace includes:
+
+```json
+{
+  "dependencies": {
+    "circomlib": "^2.0.5",           // Standard circuit library
+    "circomlibjs": "^0.1.2",         // JavaScript utilities
+    "snarkjs": "^0.4.16",            // Proof generation library
+    "ethers": "^5.6.4"               // Ethereum utilities
+  }
+}
+```
+
+<Info>
+  `circomlib` provides pre-built circuits for EdDSA, Poseidon hashing, and other cryptographic primitives.
+</Info>
+
+### Contracts workspace
+
+The `contracts` workspace includes:
+
+```json
+{
+  "dependencies": {
+    "@openzeppelin/contracts": "^4.3.2",  // Secure contract primitives
+    "circuits": "^0.1.0",                  // Link to circuits workspace
+    "snarkjs": "^0.4.16"                   // Proof verification
+  },
+  "devDependencies": {
+    "hardhat": "^2.8.0",                   // Ethereum development environment
+    "@nomiclabs/hardhat-ethers": "^2.0.3", // Ethers.js integration
+    "@typechain/hardhat": "^2.3.1",        // TypeScript type generation
+    "chai": "^4.3.4"                       // Testing framework
+  }
+}
+```
+
+### App workspace
+
+The `app` workspace includes:
+
+```json  
+{
+  "dependencies": {
+    "react": "^17.0.2",                // React framework
+    "@usedapp/core": "0.12.2",        // Web3 React hooks
+    "circuits": "^0.1.0",             // Link to circuits workspace
+    "contracts": "^0.1.0",            // Link to contracts workspace
+    "ethers": "^5.6.4",               // Ethereum library
+    "snarkjs": "^0.4.16"              // Browser proof generation
+  }
+}
+```
+
+## Verify installation
+
+Confirm everything is set up correctly:
+
+<Steps>
+  <Step title="Check system dependencies">
+    ```bash
+    node --version      # Should be v16.x.x
+    circom --version    # Should be 2.0.0+
+    rustc --version     # Should be 1.50.0+
+    yarn --version      # Should be 1.22.0+
+    ```
+  </Step>
+  
+  <Step title="Build the circuits">
+    ```bash
+    yarn workspace circuits build
+    ```
+    
+    This compiles the example circuit and generates proving keys. Should complete without errors.
+  </Step>
+  
+  <Step title="Build the contracts">
+    ```bash
+    yarn workspace contracts build
+    ```
+    
+    This compiles Solidity contracts and generates TypeScript types.
+  </Step>
+  
+  <Step title="Run the test suite">
+    ```bash
+    yarn workspace circuits test
+    yarn workspace contracts test
+    ```
+    
+    All tests should pass:
+    ```
+    Test zkp circuit and scripts
+      ✓ Should able to prove and verify the zkp
+    
+    Test ZKP contract  
+      ✓ Should able to create a zkp and verify them
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  If all tests pass, your installation is complete! Proceed to the [quickstart guide](quickstart) to build your first zkApp.
+</Note>
+
+## Environment configuration
+
+For development, you may want to configure these optional settings:
+
+### Increase Node.js memory limit
+
+Large circuits require more memory:
+
+```bash
+# Add to ~/.bashrc or ~/.zshrc
+export NODE_OPTIONS="--max-old-space-size=8192"
+```
+
+### Configure Hardhat network
+
+Edit `contracts/hardhat.config.ts` to add custom networks:
+
+```typescript
+networks: {
+  goerli: {
+    url: process.env.GOERLI_RPC_URL,
+    accounts: [process.env.PRIVATE_KEY]
+  }
+}
+```
+
+### Set up environment variables
+
+Create a `.env` file in the `contracts` workspace:
+
+```bash
+# RPC endpoints
+GOERLI_RPC_URL=https://goerli.infura.io/v3/YOUR_KEY
+MAINNET_RPC_URL=https://mainnet.infura.io/v3/YOUR_KEY
+
+# Deployer private key (NEVER commit this!)
+PRIVATE_KEY=0x...
+
+# Etherscan API key for contract verification  
+ETHERSCAN_API_KEY=YOUR_KEY
+```
+
+<Warning>
+  Never commit private keys or API keys to version control. Add `.env` to your `.gitignore` file.
+</Warning>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Circom installation fails on macOS">
+    On macOS, you may need to install additional build tools:
+    
+    ```bash
+    xcode-select --install
+    brew install cmake
+    ```
+    
+    Then retry the Circom installation.
+  </Accordion>
+  
+  <Accordion title="'snarkjs' command not found">
+    snarkjs should be available through the node_modules. Install it globally if needed:
+    
+    ```bash
+    npm install -g snarkjs
+    ```
+  </Accordion>
+  
+  <Accordion title="Yarn workspace errors">
+    If workspace linking fails, try:
+    
+    ```bash
+    rm -rf node_modules
+    rm yarn.lock
+    yarn cache clean
+    yarn install
+    ```
+  </Accordion>
+  
+  <Accordion title="Out of memory errors">
+    Circuit compilation is memory-intensive. Increase Node's memory:
+    
+    ```bash
+    export NODE_OPTIONS="--max-old-space-size=8192"
+    ```
+    
+    For very large circuits, you may need 16GB or more:
+    
+    ```bash
+    export NODE_OPTIONS="--max-old-space-size=16384"
+    ```
+  </Accordion>
+  
+  <Accordion title="Permission denied errors">
+    If you see permission errors during installation:
+    
+    ```bash
+    # Never use sudo with npm/yarn!
+    # Instead, fix npm permissions:
+    mkdir ~/.npm-global
+    npm config set prefix '~/.npm-global'
+    export PATH=~/.npm-global/bin:$PATH
+    ```
+    
+    Add the export line to your shell profile.
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Start the quickstart" icon="rocket" href="quickstart">
+    Build and run your first zkApp in 5 minutes
+  </Card>
+  <Card title="Learn the architecture" icon="sitemap" href="concepts/zero-knowledge-proofs">
+    Understand how circuits, contracts, and the app work together
+  </Card>
+</CardGroup>

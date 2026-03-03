@@ -1,80 +1,231 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Get EventConnect running in 5 minutes with a working zkApp demo
 ---
 
-## Get started in three steps
+# Quickstart
 
-Get your documentation site running locally and make your first customization.
+Get your first EventConnect zkApp running quickly with this step-by-step guide. You'll compile circuits, deploy contracts, and run a working demo application.
 
-### Step 1: Set up your local environment
+<Note>
+  This quickstart assumes you already have Node.js, Rust, and Circom installed. If not, see the [installation guide](installation) first.
+</Note>
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+## Clone the repository
+
+Start by cloning the EventConnect boilerplate repository:
+
+```bash
+git clone https://github.com/wanseob/zkp-app-boilerplate
+cd zkp-app-boilerplate
+```
+
+## Install dependencies
+
+EventConnect uses Yarn workspaces to manage multiple packages. Install all dependencies with a single command:
+
+```bash
+yarn
+```
+
+This installs dependencies for all three workspaces:
+- `circuits` - Circuit compilation and proof generation libraries
+- `contracts` - Ethereum development tools and testing frameworks  
+- `app` - React frontend and Web3 integration libraries
+
+<Info>
+  EventConnect requires Node.js version 16.x. Check your version with `node --version`.
+</Info>
+
+## Build the project
+
+The build process compiles circuits, generates verification keys, exports Solidity verifiers, and compiles smart contracts:
+
+<Steps>
+  <Step title="Run the build command">
+    ```bash
+    yarn build
+    ```
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
+    This command executes two sub-tasks:
+    - `yarn build:circuits` - Compiles Circom circuits and generates proving/verification keys
+    - `yarn build:contracts` - Compiles Solidity contracts and generates TypeScript types
+  </Step>
+  
+  <Step title="Wait for circuit compilation">
+    Circuit compilation takes several minutes on first run. You'll see output like:
     
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
+    ```
+    template instances: 1
+    non-linear constraints: 1234
+    linear constraints: 0
+    public inputs: 3
+    private inputs: 3
+    public outputs: 0
+    wires: 4567
+    labels: 8901
+    ```
+  </Step>
+  
+  <Step title="Verify build artifacts">
+    After successful compilation, check that these artifacts were created:
     
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    ```bash
+    ls circuits/zk/circuits/main_js/main.wasm  # Circuit WASM file
+    ls circuits/zk/zkeys/main.zkey             # Proving key
+    ls circuits/zk/verifiers/Main.sol          # Solidity verifier
+    ls contracts/artifacts                     # Compiled contracts
+    ```
+  </Step>
+</Steps>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+<Warning>
+  The first build generates trusted setup parameters using `powersOfTau28_hez_final_15.ptau`. For production applications, you must perform a proper trusted setup ceremony.
+</Warning>
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+## Run the demo
 
-### Step 3: Go live
+EventConnect includes a complete demo that starts a local Ethereum node and runs the full zkApp workflow:
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+```bash
+yarn demo
+```
+
+The demo performs these operations:
+
+<Steps>
+  <Step title="Start local network">
+    Launches a Hardhat local Ethereum node on `localhost:8545`
+  </Step>
+  
+  <Step title="Deploy contracts">
+    Deploys the verifier contract and zkApp contract to the local network
+  </Step>
+  
+  <Step title="Generate proofs">
+    Creates three EdDSA key pairs, signs a message with each, and generates a ZK proof verifying all three signatures
+  </Step>
+  
+  <Step title="Submit transaction">
+    Sends the proof to the smart contract for on-chain verification and records the result
+  </Step>
+</Steps>
+
+You should see output confirming each step:
+
+```
+Started HTTP and WebSocket JSON-RPC server at http://127.0.0.1:8545/
+
+Deployed Verifier at: 0x5FbDB2315678afecb367f032d93F642f64180aa3
+Deployed ZkApp at: 0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512
+
+Registering public keys...
+Signing message with 3 accounts...
+Generating ZK proof...
+Proof generated successfully!
+
+Submitting proof to contract...
+Transaction confirmed: 0xabcd...
+
+Total signed messages: 1
+```
+
+## Run tests
+
+Verify everything works correctly by running the test suites:
+
+<CodeGroup>
+
+```bash Circuit tests
+yarn workspace circuits test
+```
+
+```bash Contract tests
+yarn workspace contracts test
+```
+
+```bash App tests
+yarn workspace app test
+```
+
+</CodeGroup>
+
+All tests should pass:
+
+```
+Test zkp circuit and scripts
+  ✓ Should able to prove and verify the zkp (2547ms)
+
+1 passing (3s)
+```
+
+<Info>
+  Circuit tests take longer because they perform proof generation. Expect 2-5 seconds per test.
+</Info>
+
+## What you built
+
+Congratulations! You just:
+
+- ✅ Compiled a Circom circuit for EdDSA signature verification
+- ✅ Generated a ZK proving key and Solidity verifier contract  
+- ✅ Deployed smart contracts to a local Ethereum network
+- ✅ Created a zero-knowledge proof client-side
+- ✅ Verified the proof on-chain and recorded the result
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Follow the tutorial" icon="graduation-cap" href="guides/eddsa-signature-rollup">
+    Learn how to build an EdDSA signature rollup from scratch
+  </Card>
+  <Card title="Build circuits" icon="microchip" href="guides/building-circuits">
+    Modify the Circom circuits for your own use case
+  </Card>
+  <Card title="Deploy contracts" icon="rocket" href="guides/deploying-contracts">
+    Deploy your zkApp to testnets or mainnet
+  </Card>
+  <Card title="Frontend integration" icon="browser" href="guides/frontend-integration">
+    Create a React UI with wallet integration
+  </Card>
 </CardGroup>
 
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+## Common issues
+
+<AccordionGroup>
+  <Accordion title="Build fails with 'circom: command not found'">
+    Circom is not installed or not in your PATH. Follow the [Circom installation guide](https://docs.circom.io/getting-started/installation/) to install it.
+    
+    Verify installation:
+    ```bash
+    circom --version
+    ```
+  </Accordion>
+  
+  <Accordion title="Node version error during install">
+    EventConnect requires Node.js 16.x. Use a version manager like `nvm` to switch versions:
+    
+    ```bash
+    nvm install 16
+    nvm use 16
+    ```
+  </Accordion>
+  
+  <Accordion title="Out of memory during circuit compilation">
+    Large circuits require significant memory. Increase Node's memory limit:
+    
+    ```bash
+    export NODE_OPTIONS="--max-old-space-size=8192"
+    yarn build:circuits
+    ```
+  </Accordion>
+  
+  <Accordion title="Demo fails with 'port 8545 already in use'">
+    Another process is using port 8545. Find and kill it:
+    
+    ```bash
+    lsof -ti:8545 | xargs kill -9
+    yarn demo
+    ```
+  </Accordion>
+</AccordionGroup>

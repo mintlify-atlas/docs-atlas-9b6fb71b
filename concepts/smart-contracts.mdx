@@ -1,0 +1,568 @@
+---
+title: Smart contracts
+description: Understand EventConnect's smart contract architecture for on-chain proof verification
+---
+
+## Smart contract overview
+
+EventConnect's smart contracts provide on-chain verification of zero-knowledge proofs and state management for events and groups. The architecture consists of three main contracts:
+
+<CardGroup cols={3}>
+  <Card title="EventConnect" icon="database">
+    Group fingerprint storage and management
+  </Card>
+  <Card title="ZkApp" icon="shield-check">
+    ZKP verification and application logic
+  </Card>
+  <Card title="Verifier" icon="check-double">
+    Auto-generated Groth16 proof verifier
+  </Card>
+</CardGroup>
+
+## ZkApp contract
+
+The `ZkApp` contract is the main application contract that verifies proofs and manages state:
+
+```solidity contracts/contracts/ZkApp.sol
+contract ZkApp {
+    struct Proof {
+        uint256[2] a;
+        uint256[2][2] b;
+        uint256[2] c;
+    }
+
+    address public immutable verifier;
+    uint256[2][] public pubKeys;
+    uint256[] public signedMessages;
+
+    constructor(address verifier_) {
+        verifier = verifier_;
+    }
+
+    function registerKey(uint256[2] memory key) public {
+        require(pubKeys.length < 3, "Multisig for 3");
+        pubKeys.push(key);
+    }
+
+    function recordSignedMessage(
+        uint256 message,
+        Proof memory proof
+    ) public {
+        require(pubKeys.length == 3, "Key registration not complete");
+        
+        uint256[7] memory publicSignals;
+        publicSignals[0] = message;
+        publicSignals[1] = pubKeys[0][0];
+        publicSignals[2] = pubKeys[1][0];
+        publicSignals[3] = pubKeys[2][0];
+        publicSignals[4] = pubKeys[0][1];
+        publicSignals[5] = pubKeys[1][1];
+        publicSignals[6] = pubKeys[2][1];
+        
+        require(verify(publicSignals, proof), "SNARK verification failed");
+        signedMessages.push(message);
+    }
+
+    function verify(
+        uint256[7] memory publicSignals,
+        Proof memory proof
+    ) public view returns (bool) {
+        bool result = IVerifier(verifier).verifyProof(
+            proof.a,
+            proof.b,
+            proof.c,
+            publicSignals
+        );
+        return result;
+    }
+
+    function totalSignedMessages() public view returns (uint256) {
+        return signedMessages.length;
+    }
+}
+```
+
+### Key components
+
+<Accordion title="Proof struct">
+  The proof structure mirrors the Groth16 proof format:
+  
+  ```solidity
+  struct Proof {
+      uint256[2] a;      // Point A (x, y)
+      uint256[2][2] b;   // Point B (2D array)
+      uint256[2] c;      // Point C (x, y)
+  }
+  ```
+  
+  These are elliptic curve points on the BN128 curve used by Groth16.
+</Accordion>
+
+<Accordion title="Public key registration">
+  Before verifying signatures, public keys must be registered:
+  
+  ```solidity
+  function registerKey(uint256[2] memory key) public {
+      require(pubKeys.length < 3, "Multisig for 3");
+      pubKeys.push(key);
+  }
+  ```
+  
+  This allows the contract to include public keys in verification.
+</Accordion>
+
+<Accordion title="Message recording">
+  The main function that verifies proofs and records state:
+  
+  ```solidity
+  function recordSignedMessage(uint256 message, Proof memory proof) public
+  ```
+  
+  - Constructs public signals from stored keys
+  - Verifies the proof
+  - Records the signed message on-chain
+</Accordion>
+
+<Accordion title="Verification interface">
+  Delegates actual proof verification to the Verifier contract:
+  
+  ```solidity
+  IVerifier(verifier).verifyProof(proof.a, proof.b, proof.c, publicSignals)
+  ```
+</Accordion>
+
+## Verifier contract
+
+The verifier is auto-generated from your circuit using snarkjs:
+
+```bash
+snarkjs zkey export solidityverifier circuit_final.zkey Verifier.sol
+```
+
+### Verifier interface
+
+```solidity
+interface IVerifier {
+    function verifyProof(
+        uint256[2] memory a,
+        uint256[2][2] memory b,
+        uint256[2] memory c,
+        uint256[7] memory input
+    ) external view returns (bool r);
+}
+```
+
+<Warning>
+The input array length must match your circuit's public signals. If you change the circuit, regenerate the verifier.
+</Warning>
+
+### How verification works
+
+<Steps>
+  <Step title="Pairing check preparation">
+    The verifier prepares pairing check inputs using the proof components and verification key.
+  </Step>
+  <Step title="Public input validation">
+    Public signals are validated and transformed into curve points.
+  </Step>
+  <Step title="Pairing operation">
+    Uses EVM precompiles (0x06-0x08) to perform elliptic curve pairings on BN128.
+  </Step>
+  <Step title="Result validation">
+    Returns true if the pairing equation holds, false otherwise.
+  </Step>
+</Steps>
+
+<Info>
+Verification uses precompiled contracts, making it very gas-efficient (~250k gas regardless of circuit complexity).
+</Info>
+
+## EventConnect contract
+
+Manages group fingerprints and membership validation:
+
+```solidity contracts/contracts/EventConnect.sol
+contract EventConnect is IEventConnect, Ownable {
+    mapping(uint256 => uint256) public override groups;
+    mapping(uint256 => mapping(uint256 => uint256)) public fingerprintCreationDates;
+    mapping(uint256 => uint256) public override fingerprintDuration;
+
+    function updateGroups(Group[] calldata _groups) external override onlyOwner {
+        for (uint256 i = 0; i < _groups.length; ) {
+            groups[_groups[i].id] = _groups[i].fingerprint;
+            fingerprintCreationDates[_groups[i].id][_groups[i].fingerprint] = block.timestamp;
+            
+            emit GroupUpdated(_groups[i].id, _groups[i].fingerprint);
+            
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    function getFingerprintCreationDate(
+        uint256 groupId,
+        uint256 fingerprint
+    ) external view override returns (uint256) {
+        return fingerprintCreationDates[groupId][fingerprint];
+    }
+
+    function updateFingerprintDuration(
+        uint256 groupId,
+        uint256 durationSeconds
+    ) external override onlyOwner {
+        fingerprintDuration[groupId] = durationSeconds;
+    }
+}
+```
+
+### Group management
+
+<Accordion title="Group fingerprints">
+  A fingerprint is a cryptographic commitment to a group's membership:
+  
+  ```solidity
+  mapping(uint256 => uint256) public groups;
+  ```
+  
+  - **Key**: Group ID
+  - **Value**: Fingerprint (e.g., Merkle root or hash)
+  
+  Groups can be updated as membership changes.
+</Accordion>
+
+<Accordion title="Fingerprint expiration">
+  Fingerprints can have expiration times for enhanced security:
+  
+  ```solidity
+  mapping(uint256 => uint256) public fingerprintDuration;
+  ```
+  
+  This enables time-limited group membership validation.
+</Accordion>
+
+<Accordion title="Batch updates">
+  Multiple groups can be updated in a single transaction:
+  
+  ```solidity
+  function updateGroups(Group[] calldata _groups) external
+  ```
+  
+  This reduces gas costs for managing many groups.
+</Accordion>
+
+## Deployment
+
+Deploy contracts in the correct order:
+
+<Steps>
+  <Step title="Deploy Verifier">
+    ```typescript
+    const Verifier = await ethers.getContractFactory("Verifier");
+    const verifier = await Verifier.deploy();
+    await verifier.deployed();
+    ```
+  </Step>
+  <Step title="Deploy ZkApp">
+    ```typescript
+    const ZkApp = await ethers.getContractFactory("ZkApp");
+    const zkApp = await ZkApp.deploy(verifier.address);
+    await zkApp.deployed();
+    ```
+  </Step>
+  <Step title="Deploy EventConnect (optional)">
+    ```typescript
+    const EventConnect = await ethers.getContractFactory("EventConnect");
+    const eventConnect = await EventConnect.deploy();
+    await eventConnect.deployed();
+    ```
+  </Step>
+</Steps>
+
+<Note>
+The ZkApp constructor requires the Verifier address, so deploy Verifier first.
+</Note>
+
+## Interacting with contracts
+
+### Register public keys
+
+```typescript
+// Register 3 public keys for multisig
+const pubKeys = [
+  [account1.scalarPubKey[0], account1.scalarPubKey[1]],
+  [account2.scalarPubKey[0], account2.scalarPubKey[1]],
+  [account3.scalarPubKey[0], account3.scalarPubKey[1]]
+];
+
+for (const key of pubKeys) {
+  const tx = await zkApp.registerKey(key);
+  await tx.wait();
+}
+```
+
+### Submit proof
+
+```typescript
+// Generate proof off-chain
+const proof = await client.prove({
+  M: message.toBigInt(),
+  Ax: accounts.map(a => a.scalarPubKey[0]),
+  Ay: accounts.map(a => a.scalarPubKey[1]),
+  S: signatures.map(s => s.S),
+  R8x: signatures.map(s => F.toObject(s.R8[0])),
+  R8y: signatures.map(s => F.toObject(s.R8[1]))
+});
+
+// Submit to contract
+const tx = await zkApp.recordSignedMessage(message, proof);
+await tx.wait();
+
+console.log("Message recorded!");
+```
+
+### Query state
+
+```typescript
+// Get total signed messages
+const total = await zkApp.totalSignedMessages();
+console.log(`Total messages: ${total}`);
+
+// Get specific signed message
+const message = await zkApp.signedMessages(0);
+console.log(`First message: ${message}`);
+
+// Get registered public keys
+const key1 = await zkApp.pubKeys(0);
+console.log(`First key: [${key1[0]}, ${key1[1]}]`);
+```
+
+## Gas costs
+
+Typical gas costs for EventConnect operations:
+
+| Operation | Gas Cost | Notes |
+|-----------|----------|-------|
+| Deploy Verifier | ~3M | One-time, circuit-dependent |
+| Deploy ZkApp | ~800k | One-time |
+| Register key | ~50k | Per public key |
+| Verify + record | ~300k | Constant, regardless of signatures |
+| Query state | &lt;50k | Read operations |
+
+<Tip>
+Proof verification gas cost is constant regardless of how many signatures are in the rollup. This makes large batches very cost-effective.
+</Tip>
+
+## Upgrading contracts
+
+For upgradeable contracts, use proxy patterns:
+
+```solidity
+import "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
+
+contract ZkAppV2 is ZkApp {
+    // Add new state variables at the end
+    uint256 public newFeature;
+    
+    // Add new functions
+    function setNewFeature(uint256 _value) public {
+        newFeature = _value;
+    }
+}
+```
+
+<Warning>
+When upgrading:
+- Never change existing state variable order
+- Always add new variables at the end
+- Be careful with constructor logic (use initializers instead)
+</Warning>
+
+## Security best practices
+
+### Input validation
+
+```solidity
+function recordSignedMessage(
+    uint256 message,
+    Proof memory proof
+) public {
+    // ✅ Validate prerequisites
+    require(pubKeys.length == 3, "Key registration not complete");
+    
+    // ✅ Validate message is within expected range
+    require(message > 0, "Invalid message");
+    
+    // ✅ Verify proof
+    require(verify(publicSignals, proof), "SNARK verification failed");
+    
+    // ✅ Update state
+    signedMessages.push(message);
+}
+```
+
+### Access control
+
+```solidity
+import "@openzeppelin/contracts/access/AccessControl.sol";
+
+contract ZkApp is AccessControl {
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+    bytes32 public constant VERIFIER_ROLE = keccak256("VERIFIER_ROLE");
+    
+    constructor(address verifier_) {
+        _setupRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _setupRole(ADMIN_ROLE, msg.sender);
+    }
+    
+    function adminFunction() public onlyRole(ADMIN_ROLE) {
+        // Protected function
+    }
+}
+```
+
+### Reentrancy protection
+
+```solidity
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+
+contract ZkApp is ReentrancyGuard {
+    function recordSignedMessage(
+        uint256 message,
+        Proof memory proof
+    ) public nonReentrant {
+        // Protected from reentrancy
+    }
+}
+```
+
+## Testing contracts
+
+```typescript
+import { expect } from "chai";
+import { ethers } from "hardhat";
+
+describe("ZkApp", function() {
+  let zkApp, verifier;
+  
+  beforeEach(async function() {
+    const Verifier = await ethers.getContractFactory("Verifier");
+    verifier = await Verifier.deploy();
+    
+    const ZkApp = await ethers.getContractFactory("ZkApp");
+    zkApp = await ZkApp.deploy(verifier.address);
+  });
+  
+  it("Should verify valid proof", async function() {
+    // Register keys
+    await zkApp.registerKey([pubKey1.x, pubKey1.y]);
+    await zkApp.registerKey([pubKey2.x, pubKey2.y]);
+    await zkApp.registerKey([pubKey3.x, pubKey3.y]);
+    
+    // Generate proof
+    const proof = await client.prove({...});
+    
+    // Submit and verify
+    await expect(
+      zkApp.recordSignedMessage(message, proof)
+    ).to.emit(zkApp, "MessageRecorded");
+    
+    expect(await zkApp.totalSignedMessages()).to.equal(1);
+  });
+  
+  it("Should reject invalid proof", async function() {
+    const invalidProof = {
+      a: [0, 0],
+      b: [[0, 0], [0, 0]],
+      c: [0, 0]
+    };
+    
+    await expect(
+      zkApp.recordSignedMessage(message, invalidProof)
+    ).to.be.revertedWith("SNARK verification failed");
+  });
+});
+```
+
+## Events and indexing
+
+Emit events for off-chain indexing:
+
+```solidity
+event MessageRecorded(uint256 indexed message, address indexed sender);
+event KeyRegistered(address indexed owner, uint256[2] key);
+
+function recordSignedMessage(uint256 message, Proof memory proof) public {
+    // ... verification logic
+    
+    signedMessages.push(message);
+    emit MessageRecorded(message, msg.sender);
+}
+```
+
+### Indexing with The Graph
+
+```graphql
+type MessageRecorded @entity {
+  id: ID!
+  message: BigInt!
+  sender: Bytes!
+  timestamp: BigInt!
+  blockNumber: BigInt!
+}
+```
+
+## Advanced patterns
+
+### Batch verification
+
+```solidity
+function batchRecordMessages(
+    uint256[] calldata messages,
+    Proof[] calldata proofs
+) public {
+    require(messages.length == proofs.length, "Length mismatch");
+    
+    for (uint256 i = 0; i < messages.length; i++) {
+        require(
+            verify(constructPublicSignals(messages[i]), proofs[i]),
+            "Verification failed"
+        );
+        signedMessages.push(messages[i]);
+    }
+}
+```
+
+### Proof reuse prevention
+
+```solidity
+mapping(bytes32 => bool) public usedProofs;
+
+function recordSignedMessage(
+    uint256 message,
+    Proof memory proof
+) public {
+    bytes32 proofHash = keccak256(abi.encode(proof));
+    require(!usedProofs[proofHash], "Proof already used");
+    
+    // ... verification
+    
+    usedProofs[proofHash] = true;
+    signedMessages.push(message);
+}
+```
+
+<Warning>
+Be careful with proof reuse prevention - it can be gas-expensive for large-scale applications.
+</Warning>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Deploy your first contract" icon="rocket" href="../guides/deploying-contracts">
+    Step-by-step deployment guide
+  </Card>
+  <Card title="Contract API reference" icon="book" href="../api/contracts/event-connect">
+    Complete contract interface documentation
+  </Card>
+</CardGroup>

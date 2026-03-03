@@ -1,0 +1,206 @@
+---
+title: Zero-knowledge proofs
+description: Learn how EventConnect uses zero-knowledge proofs to enable privacy-preserving event verification
+---
+
+## What are zero-knowledge proofs?
+
+Zero-knowledge proofs (ZKPs) are cryptographic protocols that allow one party (the prover) to prove to another party (the verifier) that a statement is true, without revealing any information beyond the validity of the statement itself.
+
+<Info>
+In EventConnect, ZKPs enable users to prove they possess valid EdDSA signatures for messages without revealing the signatures themselves.
+</Info>
+
+## How EventConnect uses ZKPs
+
+EventConnect leverages zero-knowledge proofs to create a privacy-preserving signature verification system. The framework uses **Groth16**, a widely-used zk-SNARK proving system, to generate and verify proofs.
+
+### The proof workflow
+
+<Steps>
+  <Step title="Private input preparation">
+    Users prepare private inputs (EdDSA signature components: `S`, `R8x`, `R8y`)
+  </Step>
+  <Step title="Public signal definition">
+    Public signals include the message `M` and public keys (`Ax`, `Ay`)
+  </Step>
+  <Step title="Proof generation">
+    The ZKP client generates a Groth16 proof using the Circom circuit
+  </Step>
+  <Step title="On-chain verification">
+    Smart contracts verify the proof without accessing private signature data
+  </Step>
+</Steps>
+
+## Proof structure
+
+EventConnect uses the Groth16 proof system, which consists of three components:
+
+```typescript
+export interface Proof {
+  a: [bigint, bigint];           // Point A
+  b: [[bigint, bigint], [bigint, bigint]];  // Point B (2D)
+  c: [bigint, bigint];           // Point C
+}
+```
+
+<Note>
+These proof components are elliptic curve points that can be efficiently verified on-chain using precompiled contracts.
+</Note>
+
+## Generating proofs
+
+The `ZKPClient` class handles proof generation:
+
+```typescript
+const client = new ZKPClient();
+await client.init(wasmBuffer, zkeyBuffer);
+
+// Generate proof with public and private inputs
+const proof = await client.prove({
+  M: messageBigInt,        // Public: message
+  Ax: [pubKey1X, ...],     // Public: public key X coords
+  Ay: [pubKey1Y, ...],     // Public: public key Y coords
+  S: [signature1S, ...],   // Private: signature S components
+  R8x: [sig1R8x, ...],     // Private: signature R8 X coords
+  R8y: [sig1R8y, ...]      // Private: signature R8 Y coords
+});
+```
+
+### Proof generation process
+
+<Accordion title="Step 1: Initialize the witness calculator">
+  The witness calculator is built from the compiled WASM file of your Circom circuit:
+  
+  ```typescript
+  this._calculator = await buildCalculator(wasm);
+  ```
+</Accordion>
+
+<Accordion title="Step 2: Calculate witness">
+  The witness is computed from your inputs:
+  
+  ```typescript
+  const wtns = await this.calculator.calculateWTNSBin(inputs, 0);
+  ```
+</Accordion>
+
+<Accordion title="Step 3: Generate proof">
+  The Groth16 proof is generated using snarkjs:
+  
+  ```typescript
+  const { proof } = await snarkjs.groth16.prove(this._zkey, wtns);
+  ```
+</Accordion>
+
+## Verifying proofs on-chain
+
+Smart contracts verify proofs using a generated Solidity verifier contract:
+
+```solidity
+interface IVerifier {
+    function verifyProof(
+        uint256[2] memory a,
+        uint256[2][2] memory b,
+        uint256[2] memory c,
+        uint256[7] memory input  // Public signals
+    ) external view returns (bool r);
+}
+```
+
+<Tip>
+The verifier contract is automatically generated from your circuit using `snarkjs`. The number of public inputs in the `input` array must match your circuit's public signals.
+</Tip>
+
+## Benefits of ZKPs in EventConnect
+
+### Privacy preservation
+
+Signatures remain private while proving their validity. This is crucial for:
+- Protecting user signature data
+- Preventing signature reuse attacks
+- Maintaining confidentiality in multi-party scenarios
+
+### Signature rollup
+
+Multiple signatures can be verified in a single proof:
+
+```typescript
+// Verify 3 signatures in one proof
+const proof = await client.prove({
+  M: sharedMessage,
+  Ax: [pubKey1.x, pubKey2.x, pubKey3.x],
+  Ay: [pubKey1.y, pubKey2.y, pubKey3.y],
+  S: [sig1.S, sig2.S, sig3.S],
+  R8x: [sig1.R8x, sig2.R8x, sig3.R8x],
+  R8y: [sig1.R8y, sig2.R8y, sig3.R8y]
+});
+```
+
+<Info>
+This enables efficient multi-signature verification with constant on-chain cost, regardless of the number of signatures.
+</Info>
+
+### Gas efficiency
+
+Verifying a single proof on-chain is significantly cheaper than verifying multiple EdDSA signatures individually:
+
+- **Traditional**: ~100k gas per EdDSA verification
+- **With ZKP**: ~250k gas for any number of signatures in the proof
+
+## Key components
+
+<CardGroup cols={2}>
+  <Card title="Circuits" icon="circle-nodes" href="circuits">
+    Circom circuits that define the proof logic
+  </Card>
+  <Card title="EdDSA signatures" icon="signature" href="eddsa-signatures">
+    The cryptographic signatures being verified
+  </Card>
+  <Card title="Smart contracts" icon="file-contract" href="smart-contracts">
+    On-chain verification and state management
+  </Card>
+  <Card title="ZKP Client API" icon="code" href="../api/circuits/zkp-client">
+    Client library for proof generation
+  </Card>
+</CardGroup>
+
+## Security considerations
+
+<Warning>
+Always use trusted setup parameters (zkey files) from verifiable ceremonies. Never use test parameters in production.
+</Warning>
+
+### Trusted setup
+
+Groth16 requires a trusted setup ceremony. EventConnect circuits need:
+1. **Powers of Tau ceremony**: General setup for the curve
+2. **Circuit-specific setup**: Phase 2 contributions for your specific circuit
+
+### Public input validation
+
+Always validate that public inputs match expected values:
+
+```solidity
+function recordSignedMessage(uint256 message, Proof memory proof) public {
+    require(pubKeys.length == 3, "Key registration not complete");
+    
+    uint256[7] memory publicSignals;
+    publicSignals[0] = message;
+    // ... populate public keys
+    
+    require(verify(publicSignals, proof), "SNARK verification failed");
+    signedMessages.push(message);
+}
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="EdDSA signatures" href="eddsa-signatures">
+    Learn about the signature scheme used in EventConnect
+  </Card>
+  <Card title="Build your first circuit" href="../guides/building-circuits">
+    Create custom circuits for your use case
+  </Card>
+</CardGroup>

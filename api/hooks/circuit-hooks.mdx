@@ -1,0 +1,147 @@
+---
+title: Circuit hooks
+description: React hooks for zero-knowledge proof generation and EdDSA signing
+---
+
+## useCircuit
+
+Initializes and provides access to the ZKP circuit client for generating zero-knowledge proofs.
+
+```typescript
+function useCircuit(): {
+  client?: ZKPClient;
+}
+```
+
+<ResponseField name="client" type="ZKPClient | undefined">
+  Initialized ZKP client instance, or undefined while loading circuit files
+</ResponseField>
+
+<Note>
+  This hook automatically fetches the WASM and zkey files from the public directory and initializes the circuit. The client is cached globally to avoid re-initialization on subsequent renders.
+</Note>
+
+```tsx
+import useCircuit from "../hooks/useCircuit";
+import { Proof } from "circuits";
+import { EdDSASignature } from "circuits/src/eddsa";
+
+function GenZKP({
+  signature,
+  message,
+  pubKey,
+  onResult,
+}: {
+  message: bigint;
+  pubKey?: [bigint, bigint];
+  signature?: EdDSASignature;
+  onResult: (proof: Proof) => void;
+}) {
+  const { client } = useCircuit();
+  
+  return (
+    <div>
+      <button
+        disabled={!client || !pubKey || !signature}
+        onClick={async () => {
+          if (!client) alert("Client is not ready");
+          else if (!pubKey) alert("EdDSA pubkey is not ready");
+          else if (!signature) alert("EdDSA signature is not ready");
+          else {
+            client
+              .prove({
+                M: message,
+                Ax: pubKey[0],
+                Ay: pubKey[1],
+                S: signature.S,
+                R8x: client.babyjub.F.toObject(signature.R8[0]),
+                R8y: client.babyjub.F.toObject(signature.R8[1]),
+              })
+              .then(onResult);
+          }
+        }}
+      >
+        Create zkp
+      </button>
+    </div>
+  );
+}
+```
+
+### Circuit files
+
+The hook expects the following files to be available in the public directory:
+- `main.wasm` - The circuit's WebAssembly file
+- `main.zkey` - The circuit's proving key
+
+## useEdDSA
+
+Initializes and provides access to EdDSA signing functionality with the provided private key.
+
+```typescript
+function useEdDSA(privKey?: string): {
+  eddsa?: EdDSA;
+  pubKey?: [bigint, bigint];
+}
+```
+
+<ParamField path="privKey" type="string">
+  Private key for EdDSA signing. If not provided, the hook will not initialize.
+</ParamField>
+
+<ResponseField name="eddsa" type="EdDSA | undefined">
+  Initialized EdDSA instance, or undefined while loading or if no private key is provided
+</ResponseField>
+
+<ResponseField name="pubKey" type="[bigint, bigint] | undefined">
+  The scalar public key derived from the private key, represented as a tuple of two bigints
+</ResponseField>
+
+<Note>
+  This hook caches the EdDSA instance globally for the same private key to avoid re-initialization. The initialization is asynchronous and occurs when a valid private key is provided.
+</Note>
+
+```tsx
+import useEdDSA from "../hooks/useEdDSA";
+import { EdDSASignature } from "circuits/src/eddsa";
+import { BigNumberish } from "ethers";
+
+function SignEdDSA({
+  privKey,
+  message,
+  onResult,
+}: {
+  message: BigNumberish;
+  privKey?: string;
+  onResult: (signature: EdDSASignature) => void;
+}) {
+  const { eddsa } = useEdDSA(privKey);
+  
+  return (
+    <div>
+      <button
+        disabled={!eddsa}
+        onClick={async () => {
+          if (!eddsa) alert("EdDSA is not set");
+          else {
+            eddsa.sign(message).then(onResult);
+          }
+        }}
+      >
+        Create EdDSA sig
+      </button>
+    </div>
+  );
+}
+```
+
+### EdDSA signature
+
+The `eddsa.sign()` method returns an `EdDSASignature` object with the following structure:
+
+```typescript
+interface EdDSASignature {
+  R8: [any, any];  // R8 point coordinates
+  S: bigint;       // Signature scalar
+}
+```

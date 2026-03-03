@@ -1,0 +1,273 @@
+---
+title: EdDSA
+description: EdDSA signature generation and verification using BabyJubJub curve
+---
+
+## Overview
+
+The `EdDSA` class provides Edwards-curve Digital Signature Algorithm (EdDSA) functionality using the BabyJubJub elliptic curve and Poseidon hash function. It's designed for generating and verifying signatures that can be efficiently verified in zero-knowledge circuits.
+
+## Constructor
+
+```typescript
+const eddsa = new EdDSA(privKey: string);
+```
+
+Creates a new EdDSA instance with the provided private key.
+
+<ParamField path="privKey" type="string" required>
+  The private key as a hex string (e.g., "0xABCD...")
+</ParamField>
+
+<Note>
+  The instance must be initialized with `init()` before signing or verifying.
+</Note>
+
+**Example**
+
+```typescript
+import { EdDSA } from 'circuits';
+
+const privKey = '0xABCDEF12ABCDEF12ABCDEF12ABCDEF12ABCDEF12ABCDEF12ABCDEF12ABCDEF12';
+const eddsa = new EdDSA(privKey);
+```
+
+## Properties
+
+### initialized
+
+```typescript
+get initialized(): boolean
+```
+
+Returns `true` if the EdDSA instance has been initialized, `false` otherwise.
+
+<ResponseField name="initialized" type="boolean">
+  Indicates whether the instance is ready for signing and verification
+</ResponseField>
+
+### pubKey
+
+```typescript
+get pubKey(): [Uint8Array, Uint8Array]
+```
+
+Returns the public key derived from the private key as a point on the BabyJubJub curve.
+
+<ResponseField name="pubKey" type="[Uint8Array, Uint8Array]">
+  The public key as two Uint8Array coordinates representing a point on the curve
+</ResponseField>
+
+<Warning>
+  Throws an error if accessed before initialization: "Not initialized"
+</Warning>
+
+### babyjub
+
+```typescript
+get babyjub(): any
+```
+
+Returns the BabyJubJub curve instance.
+
+<ResponseField name="babyjub" type="any">
+  The BabyJubJub elliptic curve implementation from circomlibjs
+</ResponseField>
+
+<Warning>
+  Throws an error if accessed before initialization: "Not initialized"
+</Warning>
+
+### scalarPubKey
+
+```typescript
+get scalarPubKey(): [bigint, bigint]
+```
+
+Returns the public key as bigint coordinates, suitable for use in zero-knowledge circuits.
+
+<ResponseField name="scalarPubKey" type="[bigint, bigint]">
+  The public key as two bigint values (x, y coordinates)
+</ResponseField>
+
+<Warning>
+  Throws an error if accessed before initialization: "Not initialized"
+</Warning>
+
+**Example**
+
+```typescript
+const eddsa = await new EdDSA(privKey).init();
+const [pubKeyX, pubKeyY] = eddsa.scalarPubKey;
+console.log(`Public key: (${pubKeyX}, ${pubKeyY})`);
+```
+
+## Methods
+
+### init()
+
+Initializes the EdDSA instance by building the required cryptographic primitives and deriving the public key.
+
+```typescript
+async init(): Promise<EdDSA>
+```
+
+<ResponseField name="return" type="Promise<EdDSA>">
+  Returns the initialized EdDSA instance for method chaining
+</ResponseField>
+
+<Note>
+  Calling `init()` multiple times on an already initialized instance will return the instance without re-initializing.
+</Note>
+
+**Example**
+
+```typescript
+import { EdDSA } from 'circuits';
+
+const privKey = '0xABCDEF12ABCDEF12ABCDEF12ABCDEF12ABCDEF12ABCDEF12ABCDEF12ABCDEF12';
+const eddsa = await new EdDSA(privKey).init();
+```
+
+### sign()
+
+Generates an EdDSA signature for the given message using the Poseidon hash function.
+
+```typescript
+async sign(message: BigNumberish): Promise<EdDSASignature>
+```
+
+<ParamField path="message" type="BigNumberish" required>
+  The message to sign (can be a BigNumber, bigint, number, or hex string)
+</ParamField>
+
+<ResponseField name="return" type="Promise<EdDSASignature>">
+  The EdDSA signature containing R8 point and S scalar
+</ResponseField>
+
+<Warning>
+  Throws an error if the generated signature fails internal verification: "generated invalid eddsa signature"
+</Warning>
+
+**Example**
+
+```typescript
+import { EdDSA } from 'circuits';
+import { BigNumber } from 'ethers';
+
+const privKey = '0xABCDEF12ABCDEF12ABCDEF12ABCDEF12ABCDEF12ABCDEF12ABCDEF12ABCDEF12';
+const eddsa = await new EdDSA(privKey).init();
+
+const message = BigNumber.from(
+  '0xABCDEF00ABCDEF00ABCDEF00ABCDEF00ABCDEF00ABCDEF00ABCDEF00ABCDEF00'
+);
+const signature = await eddsa.sign(message);
+
+// Verify the signature
+const isValid = await eddsa.verify(message, signature, eddsa.pubKey);
+console.log('Signature valid:', isValid); // true
+```
+
+### verify()
+
+Verifies an EdDSA signature against a message and public key.
+
+```typescript
+async verify(
+  message: BigNumberish,
+  signature: EdDSASignature,
+  pubKey: [Uint8Array, Uint8Array]
+): Promise<boolean>
+```
+
+<ParamField path="message" type="BigNumberish" required>
+  The message that was signed
+</ParamField>
+
+<ParamField path="signature" type="EdDSASignature" required>
+  The signature to verify
+</ParamField>
+
+<ParamField path="pubKey" type="[Uint8Array, Uint8Array]" required>
+  The public key to verify against
+</ParamField>
+
+<ResponseField name="return" type="Promise<boolean>">
+  Returns `true` if the signature is valid, `false` otherwise
+</ResponseField>
+
+**Example**
+
+```typescript
+import { EdDSA } from 'circuits';
+import { BigNumber } from 'ethers';
+
+const privKey = '0xABCDEF12ABCDEF12ABCDEF12ABCDEF12ABCDEF12ABCDEF12ABCDEF12ABCDEF12';
+const eddsa = await new EdDSA(privKey).init();
+
+const message = BigNumber.from('0xABCD...');
+const signature = await eddsa.sign(message);
+
+// Verify with the correct public key
+const isValid = await eddsa.verify(message, signature, eddsa.pubKey);
+console.log('Valid signature:', isValid); // true
+
+// Verify with a different public key
+const otherEddsa = await new EdDSA('0x1234...').init();
+const isInvalid = await eddsa.verify(message, signature, otherEddsa.pubKey);
+console.log('Invalid signature:', isInvalid); // false
+```
+
+## Types
+
+### EdDSASignature
+
+```typescript
+interface EdDSASignature {
+  R8: [Uint8Array, Uint8Array];
+  S: bigint;
+}
+```
+
+Represents an EdDSA signature with two components:
+
+<ParamField path="R8" type="[Uint8Array, Uint8Array]">
+  The R8 point on the BabyJubJub curve (x, y coordinates as Uint8Arrays)
+</ParamField>
+
+<ParamField path="S" type="bigint">
+  The S scalar value of the signature
+</ParamField>
+
+## Usage with ZKPClient
+
+The EdDSA class is designed to work seamlessly with the ZKPClient for generating zero-knowledge proofs of signature validity:
+
+```typescript
+import { ZKPClient, EdDSA } from 'circuits';
+import { BigNumber } from 'ethers';
+import fs from 'fs';
+import path from 'path';
+
+// Initialize both clients
+const wasm = fs.readFileSync(path.join(__dirname, './main.wasm'));
+const zkey = fs.readFileSync(path.join(__dirname, './main.zkey'));
+const zkpClient = await new ZKPClient().init(wasm, zkey);
+
+const privKey = '0xABCDEF12ABCDEF12ABCDEF12ABCDEF12ABCDEF12ABCDEF12ABCDEF12ABCDEF12';
+const eddsa = await new EdDSA(privKey).init();
+
+// Sign a message
+const message = BigNumber.from('0xABCD...');
+const signature = await eddsa.sign(message);
+
+// Generate a ZK proof of the signature
+const proof = await zkpClient.prove({
+  M: message.toBigInt(),
+  Ax: eddsa.scalarPubKey[0],
+  Ay: eddsa.scalarPubKey[1],
+  S: signature.S,
+  R8x: eddsa.babyjub.F.toObject(signature.R8[0]),
+  R8y: eddsa.babyjub.F.toObject(signature.R8[1]),
+});
+```

@@ -1,0 +1,184 @@
+---
+title: EventConnect
+description: Core contract for managing off-chain group fingerprints
+---
+
+The EventConnect contract is responsible for storing and managing group fingerprints for off-chain groups. It tracks the creation dates of fingerprints and allows configuration of fingerprint validity durations.
+
+## Contract overview
+
+```solidity
+contract EventConnect is IEventConnect, Ownable
+```
+
+Inherits from OpenZeppelin's `Ownable` contract, restricting administrative functions to the contract owner.
+
+## State variables
+
+### groups
+
+```solidity
+mapping(uint256 => uint256) public groups
+```
+
+Maps group IDs to their current fingerprints.
+
+### fingerprintCreationDates
+
+```solidity
+mapping(uint256 => mapping(uint256 => uint256)) public fingerprintCreationDates
+```
+
+Maps group IDs and fingerprints to their creation timestamps.
+
+### fingerprintDuration
+
+```solidity
+mapping(uint256 => uint256) public fingerprintDuration
+```
+
+Maps group IDs to the validity duration (in seconds) of their fingerprints.
+
+## Functions
+
+### updateGroups
+
+Updates one or more off-chain group fingerprints.
+
+```solidity
+function updateGroups(Group[] calldata _groups) external onlyOwner
+```
+
+<ParamField path="_groups" type="Group[]">
+  Array of group data containing IDs and fingerprints to update
+</ParamField>
+
+<Accordion title="Group struct">
+  ```solidity
+  struct Group {
+      uint256 id;
+      uint256 fingerprint;
+  }
+  ```
+  
+  <ParamField path="id" type="uint256">
+    Unique identifier for the off-chain group
+  </ParamField>
+  
+  <ParamField path="fingerprint" type="uint256">
+    Current Merkle tree root fingerprint of the group
+  </ParamField>
+</Accordion>
+
+**Events emitted:**
+- `GroupUpdated(uint256 indexed id, uint256 fingerprint)` - Emitted for each group updated
+
+**Access control:** Only callable by contract owner
+
+**Example usage:**
+
+```solidity
+// Update multiple group fingerprints
+IEventConnect.Group[] memory groupsToUpdate = new IEventConnect.Group[](2);
+groupsToUpdate[0] = IEventConnect.Group({
+    id: 1,
+    fingerprint: 0x1234567890abcdef
+});
+groupsToUpdate[1] = IEventConnect.Group({
+    id: 2,
+    fingerprint: 0xfedcba0987654321
+});
+
+eventConnect.updateGroups(groupsToUpdate);
+```
+
+### getFingerprintCreationDate
+
+Retrieves the creation timestamp of a specific fingerprint for a group.
+
+```solidity
+function getFingerprintCreationDate(
+    uint256 groupId,
+    uint256 fingerprint
+) external view returns (uint256)
+```
+
+<ParamField path="groupId" type="uint256">
+  ID of the off-chain group
+</ParamField>
+
+<ParamField path="fingerprint" type="uint256">
+  The fingerprint to query
+</ParamField>
+
+**Returns:** `uint256` - The Unix timestamp when the fingerprint was created, or 0 if not found
+
+**Example usage:**
+
+```solidity
+uint256 creationDate = eventConnect.getFingerprintCreationDate(
+    1,
+    0x1234567890abcdef
+);
+
+if (creationDate == 0) {
+    // Fingerprint not found
+} else {
+    // Fingerprint was created at creationDate
+}
+```
+
+### updateFingerprintDuration
+
+Sets the validity duration for fingerprints of a specific group.
+
+```solidity
+function updateFingerprintDuration(
+    uint256 groupId,
+    uint256 durationSeconds
+) external onlyOwner
+```
+
+<ParamField path="groupId" type="uint256">
+  ID of the off-chain group
+</ParamField>
+
+<ParamField path="durationSeconds" type="uint256">
+  Duration in seconds that fingerprints remain valid
+</ParamField>
+
+**Access control:** Only callable by contract owner
+
+**Example usage:**
+
+```solidity
+// Set fingerprint duration to 1 hour
+eventConnect.updateFingerprintDuration(1, 3600);
+
+// Set fingerprint duration to 1 day
+eventConnect.updateFingerprintDuration(2, 86400);
+```
+
+## Events
+
+### GroupUpdated
+
+Emitted when an off-chain group fingerprint is updated.
+
+```solidity
+event GroupUpdated(uint256 indexed id, uint256 fingerprint)
+```
+
+<ParamField path="id" type="uint256" indexed>
+  ID of the group that was updated
+</ParamField>
+
+<ParamField path="fingerprint" type="uint256">
+  New fingerprint value for the group
+</ParamField>
+
+## Error conditions
+
+Since this contract inherits from `Ownable`, attempting to call restricted functions without proper ownership will revert with:
+
+- `Ownable: caller is not the owner` - Thrown when a non-owner attempts to call `updateGroups` or `updateFingerprintDuration`
